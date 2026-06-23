@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:macro name="so101_gazebo_world_fixed_joint" params="z_offset:='0.0'">
+    <link name="world"/>
+    <joint name="world_to_base_link" type="fixed">
+      <parent link="world"/>
+      <child link="base_link"/>
+      <origin xyz="0 0 ${z_offset}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:macro name="so101_gazebo_control_plugin"
+               params="namespace:=''
+                       controller_config_file:=''
+                       controller_manager_name:='controller_manager'
+                       hold_joints:='true'
+                       position_proportional_gain:='0.35'">
+    <gazebo>
+      <plugin filename="libgz_ros2_control-system.so"
+              name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+        <parameters>${controller_config_file}</parameters>
+        <controller_manager_name>${controller_manager_name}</controller_manager_name>
+        <hold_joints>${hold_joints}</hold_joints>
+        <position_proportional_gain>${position_proportional_gain}</position_proportional_gain>
+        <ros>
+          <namespace>${namespace}</namespace>
+        </ros>
+      </plugin>
+    </gazebo>
+  </xacro:macro>
+
+</robot>

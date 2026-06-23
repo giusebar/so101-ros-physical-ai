@@ -272,6 +272,45 @@ ros2 launch so101_bringup teleop.launch.py use_cameras:=false use_camera_tf:=fal
 ros2 launch so101_bringup teleop.launch.py use_teleop_rviz:=false
 ```
 
+### Gazebo Harmonic Simulation
+
+The repo includes a first-pass Gazebo Harmonic simulation path for ROS 2 Jazzy. It runs two SO-101 arms in Gazebo with `gz_ros2_control`: a keyboard-driven simulated leader and a simulated follower mirrored through the existing split teleop relay.
+
+Install the Gazebo ROS integration packages if they are not already present:
+
+```bash
+sudo apt install ros-jazzy-ros-gz-sim ros-jazzy-ros-gz-bridge ros-jazzy-gz-ros2-control
+```
+
+Launch the two-arm teleop simulation:
+
+```bash
+source ~/ros2_ws/install/setup.bash
+ros2 launch so101_bringup gazebo_teleop_sim.launch.py
+```
+
+Keyboard controls for the simulated leader:
+
+| Keys | Joint | Direction |
+| ---- | ----- | --------- |
+| `1` / `q` | shoulder_pan | + / - |
+| `2` / `w` | shoulder_lift | + / - |
+| `3` / `e` | elbow_flex | + / - |
+| `4` / `r` | wrist_flex | + / - |
+| `5` / `t` | wrist_roll | + / - |
+| `p` / `o` | gripper | open / close |
+| Space | arm | reset arm joints to zero |
+
+Use uppercase keys for a faster step. The leader publishes `/leader/joint_states`; `so101_teleop` mirrors those states to the follower through `/follower/arm_trajectory_controller` and `/follower/gripper_controller`.
+
+You can also launch a follower-only Gazebo + MoveIt validation setup:
+
+```bash
+ros2 launch so101_bringup gazebo_follower_moveit.launch.py
+```
+
+Phase-one simulation scope is arm dynamics and control only. Simulated RGB/depth cameras and perception-topic bridges are intentionally left for a later pass.
+
 ### Episode Recording
 
 Record teleoperation episodes for imitation learning. In one terminal, launch the recording session:
@@ -445,6 +484,8 @@ ros2 launch so101_bringup follower_moveit_demo.launch.py
 | `use_rerun`         | `false`               | Launch Rerun bridge                                    |
 | `leader_usb_port`   | `/dev/so101_leader`   | Leader arm USB device                                  |
 | `follower_usb_port` | `/dev/so101_follower` | Follower arm USB device                                |
+
+Gazebo simulation uses dedicated launch files instead of the physical teleop launch arguments: `gazebo_teleop_sim.launch.py` for two-arm keyboard teleop and `gazebo_follower_moveit.launch.py` for follower MoveIt validation.
 
 ### Launch Arguments (inference.launch.py)
 

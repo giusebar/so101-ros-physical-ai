@@ -1,0 +1,30 @@
+/**:
+  ros__parameters:
+    arm_topic: "/leader/arm_forward_controller/commands"
+    gripper_topic: "/leader/gripper_forward_controller/commands"
+    joint_state_topic: "/leader/joint_states"
+    publish_rate_hz: 50.0
+    step_rad: 0.035
+    fast_step_multiplier: 3.0
+    stale_seed_timeout_s: 2.0
+    arm_joints:
+      - "shoulder_pan"
+      - "shoulder_lift"
+      - "elbow_flex"
+      - "wrist_flex"
+      - "wrist_roll"
+    gripper_joint: "gripper"
+    lower_limits:
+      - -1.91986
+      - -1.74533
+      - -1.69
+      - -1.65806
+      - -2.74385
+    upper_limits:
+      - 1.91986
+      - 1.74533
+      - 1.69
+      - 1.65806
+      - 2.84121
+    gripper_lower_limit: -0.174533
+    gripper_upper_limit: 1.74533

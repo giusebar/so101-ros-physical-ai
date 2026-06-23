@@ -1,0 +1,6 @@
+name: open-manipulator
+base: ubuntu@24.04
+sdks:
+  - name: ros2-desktop
+    channel: jazzy/stable
+  - name: vscode-remote

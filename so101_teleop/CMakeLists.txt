@@ -20,6 +20,7 @@ find_package(control_msgs REQUIRED)
 # Add executables 
 add_executable(teleop_split src/teleop_split.cpp)
 add_executable(teleop src/teleop.cpp)
+add_executable(leader_sim_keyboard src/leader_sim_keyboard.cpp)
 
 # Link dependencies
 ament_target_dependencies(teleop
@@ -34,11 +35,18 @@ ament_target_dependencies(teleop_split
   sensor_msgs
   trajectory_msgs
   control_msgs)
+ament_target_dependencies(leader_sim_keyboard
+	rclcpp
+  rclcpp_action
+	std_msgs
+  sensor_msgs
+  control_msgs)
 
 # Install executables
 install(TARGETS 
   teleop
 	teleop_split
+  leader_sim_keyboard
 	DESTINATION lib/${PROJECT_NAME})
 
 # Install share files, launch 

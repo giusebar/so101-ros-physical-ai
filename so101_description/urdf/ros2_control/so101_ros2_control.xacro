@@ -1,11 +1,11 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-    <xacro:macro name="so101_control_joint" params="variant joint id">
+    <xacro:macro name="so101_control_joint" params="variant hardware_type joint id">
         <joint name="${joint}">
             <param name="id">${id}</param>
             <!-- follower can be commanded; leader is state-only -->
-            <xacro:if value="${variant == 'follower'}">
+            <xacro:if value="${variant == 'follower' or hardware_type == 'gazebo'}">
                 <command_interface name="position"/>
                 <param name="p_coefficient">16</param>
                 <param name="i_coefficient">0</param>
@@ -44,15 +44,19 @@
                     <param name="usb_port">${usb_port}</param>
                     <param name="joint_config_file">${joint_config_file}</param>
                 </xacro:if>
+
+                    <xacro:if value="${hardware_type == 'gazebo'}">
+                        <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+                    </xacro:if>
             </hardware>
             
             <!-- arm joints -->
-            <xacro:so101_control_joint variant="${variant}" joint="shoulder_pan"  id="1"/>
-            <xacro:so101_control_joint variant="${variant}" joint="shoulder_lift" id="2"/>
-            <xacro:so101_control_joint variant="${variant}" joint="elbow_flex"   id="3"/>
-            <xacro:so101_control_joint variant="${variant}" joint="wrist_flex"   id="4"/>
-            <xacro:so101_control_joint variant="${variant}" joint="wrist_roll"   id="5"/>
-            <xacro:so101_control_joint variant="${variant}" joint="gripper"      id="6"/>
+                <xacro:so101_control_joint variant="${variant}" hardware_type="${hardware_type}" joint="shoulder_pan"  id="1"/>
+                <xacro:so101_control_joint variant="${variant}" hardware_type="${hardware_type}" joint="shoulder_lift" id="2"/>
+                <xacro:so101_control_joint variant="${variant}" hardware_type="${hardware_type}" joint="elbow_flex"   id="3"/>
+                <xacro:so101_control_joint variant="${variant}" hardware_type="${hardware_type}" joint="wrist_flex"   id="4"/>
+                <xacro:so101_control_joint variant="${variant}" hardware_type="${hardware_type}" joint="wrist_roll"   id="5"/>
+                <xacro:so101_control_joint variant="${variant}" hardware_type="${hardware_type}" joint="gripper"      id="6"/>
 
         </ros2_control>
     </xacro:macro>

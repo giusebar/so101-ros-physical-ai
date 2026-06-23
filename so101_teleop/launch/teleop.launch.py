@@ -14,6 +14,7 @@ def generate_launch_description():
     follower_ns = LaunchConfiguration("follower_namespace")
     arm_controller = LaunchConfiguration("arm_controller")
     params_file = LaunchConfiguration("params_file")
+    use_sim_time = LaunchConfiguration("use_sim_time")
 
     default_params = PathJoinSubstitution(
         [FindPackageShare("so101_teleop"), "config", "teleop.yaml"]
@@ -45,6 +46,7 @@ def generate_launch_description():
                 "arm_controller", default_value="forward_controller"
             ),  # trajectory_controller|forward_controller
             DeclareLaunchArgument("params_file", default_value=default_params),
+            DeclareLaunchArgument("use_sim_time", default_value="false"),
             Node(
                 package="so101_teleop",
                 executable="teleop",
@@ -57,6 +59,7 @@ def generate_launch_description():
                         "leader_topic": leader_topic,
                         "jtc_topic": jtc_topic,
                         "fwd_topic": fwd_topic,
+                        "use_sim_time": use_sim_time,
                     },
                 ],
             ),

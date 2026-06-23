@@ -1,0 +1,33 @@
+leader:
+  controller_manager:
+    ros__parameters:
+      update_rate: 100
+
+      joint_state_broadcaster:
+        type: joint_state_broadcaster/JointStateBroadcaster
+
+      arm_forward_controller:
+        type: forward_command_controller/ForwardCommandController
+
+      gripper_forward_controller:
+        type: forward_command_controller/ForwardCommandController
+
+  joint_state_broadcaster:
+    ros__parameters:
+      publish_rate: 50.0
+
+  arm_forward_controller:
+    ros__parameters:
+      joints:
+        - shoulder_pan
+        - shoulder_lift
+        - elbow_flex
+        - wrist_flex
+        - wrist_roll
+      interface_name: position
+
+  gripper_forward_controller:
+    ros__parameters:
+      joints:
+        - gripper
+      interface_name: position

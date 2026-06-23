@@ -31,6 +31,9 @@ public:
         "jtc_topic", "/follower/arm_trajectory_controller/joint_trajectory");
     follower_fwd_topic_ =
         declare_parameter<std::string>("fwd_topic", "/follower/arm_forward_controller/commands");
+    gripper_mode_ = declare_parameter<std::string>("gripper_mode", "parallel_action");
+    gripper_fwd_topic_ =
+      declare_parameter<std::string>("gripper_fwd_topic", "/follower/gripper_controller/commands");
     gripper_action_name_ = declare_parameter<std::string>(
         "gripper_action", "/follower/gripper_controller/gripper_cmd");
 
@@ -47,7 +50,7 @@ public:
 
     RCLCPP_INFO(get_logger(), "Leader: %s", leader_topic_.c_str());
     RCLCPP_INFO(get_logger(), "Follower JTC: %s", follower_jtc_topic_.c_str());
-    RCLCPP_INFO(get_logger(), "Gripper action: %s", gripper_action_name_.c_str());
+    RCLCPP_INFO(get_logger(), "Gripper mode: %s", gripper_mode_.c_str());
     RCLCPP_INFO(get_logger(), "Rate: %.1f Hz, Arm joints: %zu", publish_rate_hz_,
                 arm_joints_.size());
 
@@ -60,6 +63,8 @@ public:
         follower_jtc_topic_, rclcpp::QoS(10).reliable());
     forward_pub_ = create_publisher<std_msgs::msg::Float64MultiArray>(follower_fwd_topic_,
                                                                       rclcpp::QoS(10).reliable());
+    gripper_forward_pub_ = create_publisher<std_msgs::msg::Float64MultiArray>(
+      gripper_fwd_topic_, rclcpp::QoS(10).reliable());
     gripper_action_client_ =
         rclcpp_action::create_client<ParallelGripperCommand>(this, gripper_action_name_);
 
@@ -77,6 +82,8 @@ private:
   std::string leader_topic_;
   std::string follower_jtc_topic_;
   std::string follower_fwd_topic_;
+  std::string gripper_mode_;
+  std::string gripper_fwd_topic_;
   std::string gripper_action_name_;
   double publish_rate_hz_{50.0};
   double stale_timeout_s_{0.25};
@@ -90,6 +97,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr leader_sub_;
   rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr trajectory_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr forward_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr gripper_forward_pub_;
   rclcpp_action::Client<ParallelGripperCommand>::SharedPtr gripper_action_client_;
   rclcpp::TimerBase::SharedPtr timer_;
 
@@ -186,6 +194,16 @@ private:
     if (!gripper_idx_) return;
     if (std::abs(raw_gripper_ - last_gripper_goal_) <= gripper_deadband_) return;
     if ((time - last_gripper_goal_time_).seconds() < gripper_min_interval_s_) return;
+
+    if (gripper_mode_ == "forward_position") {
+      std_msgs::msg::Float64MultiArray cmd;
+      cmd.data = {raw_gripper_};
+      gripper_forward_pub_->publish(cmd);
+      last_gripper_goal_ = raw_gripper_;
+      last_gripper_goal_time_ = time;
+      return;
+    }
+
     if (!gripper_action_client_->wait_for_action_server(std::chrono::seconds(0))) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "Gripper action server not ready (%s)",
                            gripper_action_name_.c_str());

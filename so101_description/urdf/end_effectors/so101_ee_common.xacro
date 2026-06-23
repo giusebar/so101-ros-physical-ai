@@ -27,6 +27,7 @@
       <child link="gripper_link"/>
       <axis xyz="0 0 1"/>
       <limit effort="10" velocity="10" lower="-2.74385" upper="2.84121"/>
+      <dynamics damping="0.12" friction="0.02"/>
     </joint>
 
     <xacro:if value="${add_transmission}">

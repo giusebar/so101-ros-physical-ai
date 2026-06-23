@@ -8,6 +8,11 @@
   <xacro:arg name="hardware_type" default="mock"/>
   <xacro:arg name="usb_port" default="/dev/ttyUSB0"/>
   <xacro:arg name="joint_config_file" default=""/>
+  <xacro:arg name="controller_config_file" default=""/>
+  <xacro:arg name="ros_namespace" default=""/>
+  <xacro:arg name="controller_manager_name" default="controller_manager"/>
+  <xacro:arg name="sim_hold_joints" default="true"/>
+  <xacro:arg name="sim_position_proportional_gain" default="0.35"/>
 
   <!-- Camera args -->
   <xacro:arg name="enable_static_cam" default="false"/>
@@ -20,6 +25,7 @@
   <!-- Convert args to properties for use in ${} expressions -->
   <xacro:property name="use_ros2_control" value="$(arg use_ros2_control)"/>
   <xacro:property name="variant" value="$(arg variant)"/>
+  <xacro:property name="hardware_type" value="$(arg hardware_type)"/>
   <xacro:property name="enable_static_cam" value="$(arg enable_static_cam)"/>
   <xacro:property name="enable_wrist_cam" value="$(arg enable_wrist_cam)"/>
 
@@ -33,6 +39,7 @@
 
   <xacro:include filename="$(find so101_description)/urdf/ros2_control/so101_ros2_control.xacro"/>
   <xacro:include filename="$(find so101_description)/urdf/so101_cameras.xacro"/>
+  <xacro:include filename="$(find so101_description)/urdf/so101_gazebo.xacro"/>
 
 
   <xacro:so101_materials/>
@@ -60,6 +67,16 @@
       usb_port="$(arg usb_port)"
       joint_config_file="$(arg joint_config_file)"
       system_name="SO101_${variant}_SYSTEM"/>
+
+    <xacro:if value="${hardware_type == 'gazebo'}">
+      <xacro:so101_gazebo_world_fixed_joint/>
+      <xacro:so101_gazebo_control_plugin
+        namespace="$(arg ros_namespace)"
+        controller_config_file="$(arg controller_config_file)"
+        controller_manager_name="$(arg controller_manager_name)"
+        hold_joints="$(arg sim_hold_joints)"
+        position_proportional_gain="$(arg sim_position_proportional_gain)"/>
+    </xacro:if>
   </xacro:if>
 
   <!-- Cameras (opt-in via enable_static_cam / enable_wrist_cam) -->

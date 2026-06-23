@@ -89,6 +89,7 @@
       <child link="shoulder_link"/>
       <axis xyz="0 0 1"/>
       <limit effort="10" velocity="10" lower="-1.91986" upper="1.91986"/>
+      <dynamics damping="0.25" friction="0.05"/>
     </joint>
 
     <joint name="shoulder_lift" type="revolute">
@@ -97,6 +98,7 @@
       <child link="upper_arm_link"/>
       <axis xyz="0 0 1"/>
       <limit effort="10" velocity="10" lower="-1.74533" upper="1.74533"/>
+      <dynamics damping="0.25" friction="0.05"/>
     </joint>
 
     <joint name="elbow_flex" type="revolute">
@@ -105,6 +107,7 @@
       <child link="lower_arm_link"/>
       <axis xyz="0 0 1"/>
       <limit effort="10" velocity="10" lower="-1.69" upper="1.69"/>
+      <dynamics damping="0.2" friction="0.04"/>
     </joint>
 
     <joint name="wrist_flex" type="revolute">
@@ -113,6 +116,7 @@
       <child link="wrist_link"/>
       <axis xyz="0 0 1"/>
       <limit effort="10" velocity="10" lower="-1.65806" upper="1.65806"/>
+      <dynamics damping="0.15" friction="0.03"/>
     </joint>
 
     <!-- OPTIONAL transmissions motor1..motor4 -->
