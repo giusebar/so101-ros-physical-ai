@@ -3,4 +3,7 @@ base: ubuntu@24.04
 sdks:
   - name: ros2-desktop
     channel: jazzy/stable
+    plugs:
+      camera:
+        interface: camera
   - name: vscode-remote

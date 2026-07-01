@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>so101_depth_demo</name>
+  <version>0.1.0</version>
+  <description>
+    CPU-capable Depth Anything V2 (Small) monocular depth visualization demo for
+    the SO-101. Extracted from the snap-twin Jetson/TensorRT demo and reworked to
+    subscribe to ROS image topics and run with ONNX Runtime (no NVIDIA required).
+  </description>
+  <maintainer email="giuseppe.barbieri@canonical.com">Giuseppe Barbieri</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+
+  <!-- Python runtime deps provided via Pixi / pip:
+       onnxruntime, numpy, opencv-python (cv2) -->
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
