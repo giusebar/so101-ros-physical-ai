@@ -1,0 +1,113 @@
+# MoveIt Servo configuration for the SO-101 follower arm.
+#
+# Drives the Cartesian-jogging path that replaces the retired custom
+# robokin/Placo/Viser IK teleop (so101_kinematics). Input adapters
+# (joystick + keyboard, Phase 2) publish TwistStamped / JointJog to this
+# node; Servo produces one joint setpoint per tick and streams it to the
+# arm_forward_controller (position, std_msgs/Float64MultiArray).
+#
+# NOTE: This targets moveit_servo 2.x (ROS 2 Jazzy, generate_parameter_library
+# based). The planning/end-effector frames are derived from the SRDF move
+# group ("manipulator": base_link -> gripper_frame_link), so the legacy
+# planning_frame / ee_frame_name / robot_link_command_frame keys from the
+# old Servo API are intentionally NOT set here.
+#
+# Parameters live at the top level; the launch file wraps them under the
+# "moveit_servo" namespace via launch_param_builder.ParameterBuilder.
+
+###############################################################################
+# Outgoing command timing
+###############################################################################
+publish_period: 0.05           # 1 / nominal publish rate [s] -> 20 Hz
+# NOTE: was 0.01 (100 Hz). On real hardware, the feetech_ros2_driver's write()
+# re-issues a fresh Write_Goal_Position (with a fixed firmware speed/accel
+# profile) on every single ros2_control cycle. At 100 Hz, each new goal is
+# only ~0.015 rad past the last one and arrives before the servo's own
+# acceleration ramp has built up any real velocity, so the goal keeps getting
+# "reset" and the arm never visibly moves despite torque being engaged and
+# the correct incremental targets being computed. Slowing the publish rate
+# gives the firmware's accel ramp time to actually act between updates.
+max_expected_latency: 0.2      # command-to-execution delay [s]. Must be
+# > 3x publish_period (Servo enforces this at startup).
+
+###############################################################################
+# Incoming command settings
+###############################################################################
+# unitless: commands are in [-1:1] as if from a joystick. Servo acts as the
+# interpolator, producing one setpoint per tick.
+command_in_type: "unitless"
+scale:
+  linear: 0.2                 # scaling on unitless linear twist
+  rotational: 0.8            # scaling on unitless angular twist
+  joint: 4.0                 # scaling on unitless joint jog.
+                             # Servo is closed-loop on the MEASURED follower
+                             # state, so each tick it only commands one step
+                             # (cmd * scale.joint * publish_period) ahead of the
+                             # actual position. That step is the entire position
+                             # error the Feetech servo ever sees. With the weak
+                             # follower P gain (p_coefficient=16) a 1.5-scale
+                             # step (~0.075 rad) is too small to generate torque
+                             # against gravity/stiction, so the arm (worst on the
+                             # gravity-loaded elbow) never moves and the mirror
+                             # deadlocks. 3.0 (~0.15 rad max step) gives the
+                             # Feetech a large enough error to track. Raising the
+                             # follower P gain instead/also would let this be
+                             # lowered again for smoother motion.
+incoming_command_timeout: 0.1
+
+# Apply angular velocity about the EE frame axes (intuitive tool jogging).
+apply_twist_commands_about_ee_frame: true
+
+###############################################################################
+# MoveIt group
+###############################################################################
+move_group_name: manipulator  # SRDF chain base_link -> gripper_frame_link
+
+###############################################################################
+# Outgoing command -> forward_command_controller on the follower
+###############################################################################
+command_out_topic: /follower/arm_forward_controller/commands
+command_out_type: std_msgs/Float64MultiArray
+# forward_command_controller uses interface_name: position, so publish only
+# positions (5 values, arm joint order matches the controller config).
+publish_joint_positions: true
+publish_joint_velocities: false
+publish_joint_accelerations: false
+
+###############################################################################
+# Planning scene monitor / state
+###############################################################################
+joint_topic: /follower/joint_states
+# Servo maintains its own planning scene for standalone bring-up. When running
+# alongside move_group as the primary scene source, set this to false.
+is_primary_planning_scene_monitor: true
+check_octomap_collisions: false
+
+###############################################################################
+# Command smoothing
+###############################################################################
+use_smoothing: true
+smoothing_filter_plugin_name: "online_signal_smoothing::ButterworthFilterPlugin"
+
+###############################################################################
+# Collision monitor (supersedes trajectory_safety_gate on this path)
+###############################################################################
+check_collisions: true
+collision_check_rate: 10.0                 # [Hz]
+self_collision_proximity_threshold: 0.01   # [m]
+scene_collision_proximity_threshold: 0.02  # [m]
+
+###############################################################################
+# Singularity handling
+###############################################################################
+lower_singularity_threshold: 17.0
+hard_stop_singularity_threshold: 30.0
+leaving_singularity_threshold_multiplier: 2.0
+
+###############################################################################
+# Joint-limit handling
+###############################################################################
+halt_all_joints_in_joint_mode: true
+halt_all_joints_in_cartesian_mode: true
+joint_limit_margins: [0.1]
+override_velocity_scaling_factor: 0.0

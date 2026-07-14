@@ -18,7 +18,7 @@ Parameters:
   input_image_topic   (string) camera image topic
     stop_topic          (string) Bool output (default /safety/protective_stop)
   debug_image_topic   (string) optional colorised depth + ROI overlay
-  model_input_size    (int)    square model input (default 518)
+  model_input_size    (int)    square model input, multiple of 14 (default 308)
   roi                 (string) "x1,y1,x2,y2" normalised center ROI
   near_threshold      (float)  normalised depth [0,1] above which a pixel is near
   min_area_ratio      (float)  fraction of ROI that must be near to trigger
@@ -55,7 +55,9 @@ class DepthProximityNode(Node):
         self.declare_parameter("input_image_topic", "/static_camera/image_raw")
         self.declare_parameter("stop_topic", "/safety/protective_stop")
         self.declare_parameter("debug_image_topic", "/safety/depth_debug_image")
-        self.declare_parameter("model_input_size", 518)
+        # Must be a multiple of 14 (ViT patch size). 308=14x22 runs ~2.8x
+        # faster on CPU than the native 518=14x37, ample for proximity safety.
+        self.declare_parameter("model_input_size", 308)
         self.declare_parameter("roi", "0.25,0.2,0.75,0.85")
         self.declare_parameter("near_threshold", 0.6)
         self.declare_parameter("near_margin", 0.15)

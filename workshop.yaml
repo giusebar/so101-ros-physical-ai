@@ -7,3 +7,4 @@ sdks:
       camera:
         interface: camera
   - name: vscode-remote
+  - name: project-tty-sdk

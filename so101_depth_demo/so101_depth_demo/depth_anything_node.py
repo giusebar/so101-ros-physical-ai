@@ -19,7 +19,7 @@ Parameters:
   model_path          (string) path to the Depth Anything V2 Small .onnx file
   input_image_topic   (string) camera image topic to subscribe to
   output_image_topic  (string) colorised depth visualisation topic to publish
-  model_input_size    (int)    square model input size (default 518)
+  model_input_size    (int)    square model input size, multiple of 14 (default 308)
   publish_width       (int)    output width  (default 518)
   publish_height      (int)    output height (default 518)
   min_period_s        (float)  minimum seconds between inferences (CPU throttle)
@@ -52,7 +52,10 @@ class DepthAnythingNode(Node):
         self.declare_parameter("model_path", default_model)
         self.declare_parameter("input_image_topic", "/follower/image_raw")
         self.declare_parameter("output_image_topic", "/camera/depth/visualization")
-        self.declare_parameter("model_input_size", 518)
+        # Must be a multiple of 14 (ViT patch size). 518=14x37 is the model's
+        # native size; 308=14x22 runs ~2.8x faster on CPU with minor accuracy
+        # loss (fine for relative-depth visualisation / proximity safety).
+        self.declare_parameter("model_input_size", 308)
         self.declare_parameter("publish_width", 518)
         self.declare_parameter("publish_height", 518)
         self.declare_parameter("min_period_s", 0.0)

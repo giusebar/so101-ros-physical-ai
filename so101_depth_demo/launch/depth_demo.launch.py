@@ -27,9 +27,10 @@ def generate_launch_description():
             default_value="/camera/depth/visualization",
             description="Colorised depth visualisation topic to publish.",
         ),
-        DeclareLaunchArgument("model_input_size", default_value="518"),
-        DeclareLaunchArgument("publish_width", default_value="518"),
-        DeclareLaunchArgument("publish_height", default_value="518"),
+        # Multiple of 14 (ViT patch size); 308 runs ~2.8x faster than native 518.
+        DeclareLaunchArgument("model_input_size", default_value="308"),
+        DeclareLaunchArgument("publish_width", default_value="256"),
+        DeclareLaunchArgument("publish_height", default_value="256"),
         DeclareLaunchArgument(
             "min_period_s",
             default_value="0.0",

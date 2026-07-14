@@ -90,6 +90,7 @@ def _clock_bridge():
 def generate_launch_description():
     launch_keyboard = LaunchConfiguration("launch_keyboard")
     launch_teleop = LaunchConfiguration("launch_teleop")
+    follower_arm_controller = LaunchConfiguration("follower_arm_controller")
 
     bringup_share = get_package_share_directory("so101_bringup")
     world_file = os.path.join(bringup_share, "worlds", "so101_empty.sdf")
@@ -146,7 +147,7 @@ def generate_launch_description():
             _spawn_controller("leader", "arm_forward_controller"),
             _spawn_controller("leader", "gripper_forward_controller"),
             _spawn_controller("follower", "joint_state_broadcaster"),
-            _spawn_controller("follower", "arm_trajectory_controller"),
+            _spawn_controller("follower", follower_arm_controller),
             _spawn_controller("follower", "gripper_controller"),
         ],
     )
@@ -155,6 +156,17 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("launch_keyboard", default_value="false"),
             DeclareLaunchArgument("launch_teleop", default_value="true"),
+            DeclareLaunchArgument(
+                "follower_arm_controller",
+                default_value="arm_trajectory_controller",
+                description=(
+                    "Follower arm controller to spawn: arm_trajectory_controller "
+                    "(JTC, for the built-in leader->follower teleop bridge) or "
+                    "arm_forward_controller (position streaming, required when "
+                    "driving the follower through MoveIt Servo). Set launch_teleop "
+                    "to false when using Servo so the bridge does not fight it."
+                ),
+            ),
             gz_sim,
             _clock_bridge(),
             _rsp("leader", leader_description_param),

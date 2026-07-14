@@ -13,7 +13,7 @@ follower:
         type: joint_trajectory_controller/JointTrajectoryController
 
       gripper_controller:
-        type: parallel_gripper_action_controller/GripperActionController
+        type: forward_command_controller/ForwardCommandController
 
   joint_state_broadcaster:
     ros__parameters:
@@ -54,8 +54,6 @@ follower:
 
   gripper_controller:
     ros__parameters:
-      joint: gripper
-      allow_stalling: true
-      # Optional: tune these later
-      # max_velocity: 1.0
-      # max_effort: 0.0
+      joints:
+        - gripper
+      interface_name: position

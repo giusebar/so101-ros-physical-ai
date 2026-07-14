@@ -34,8 +34,8 @@ def generate_launch_description():
     safety_stop_topic = LaunchConfiguration("safety_stop_topic")
 
     camera = Node(
-        package="v4l2_camera",
-        executable="v4l2_camera_node",
+        package="usb_cam",
+        executable="usb_cam_node_exe",
         name="cam_overhead",
         namespace="static_camera",
         output="screen",
@@ -45,7 +45,7 @@ def generate_launch_description():
                     FindPackageShare("so101_bringup"),
                     "config",
                     "cameras",
-                    "so101_v4l2_cam.yaml",
+                    "so101_usb_cam.yaml",
                 ]
             ),
             {
@@ -84,10 +84,10 @@ def generate_launch_description():
         parameters=[
             {
                 "input_topic": "/safety/follower/arm_trajectory_in",
-                "output_topic": "/follower/arm_trajectory_controller/joint_trajectory",
+                "output_topic": "/follower/trajectory_controller/joint_trajectory",
                 "safety_stop_topic": safety_stop_topic,
                 "joint_states_topic": "/follower/joint_states",
-                "use_sim_time": True,
+                "use_sim_time": False,
             }
         ],
     )
@@ -102,7 +102,7 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
-            DeclareLaunchArgument("camera_device", default_value="/dev/video5"),
+            DeclareLaunchArgument("camera_device", default_value="/dev/video4"),
             DeclareLaunchArgument("image_topic", default_value="/static_camera/image_raw"),
             DeclareLaunchArgument(
                 "model_path",
@@ -116,7 +116,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument("near_margin", default_value="0.15"),
             DeclareLaunchArgument("min_area_ratio", default_value="0.12"),
-            DeclareLaunchArgument("inference_hz", default_value="10.0"),
+            DeclareLaunchArgument("inference_hz", default_value="1.0"),
             camera,
             depth_stop,
             safety_gate,

@@ -31,6 +31,7 @@ def _clock_bridge():
 
 def generate_launch_description():
     use_rviz = LaunchConfiguration("use_rviz")
+    arm_controller = LaunchConfiguration("arm_controller")
 
     bringup_share = get_package_share_directory("so101_bringup")
     world_file = os.path.join(bringup_share, "worlds", "so101_empty.sdf")
@@ -111,6 +112,16 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument("use_rviz", default_value="true"),
+            DeclareLaunchArgument(
+                "arm_controller",
+                default_value="arm_trajectory_controller",
+                description=(
+                    "Arm controller to spawn: arm_trajectory_controller (JTC, for "
+                    "MoveIt planned execution) or arm_forward_controller (position "
+                    "streaming, required for MoveIt Servo jogging). Both claim the "
+                    "same position command interfaces, so only one is active."
+                ),
+            ),
             gz_sim,
             _clock_bridge(),
             rsp,
@@ -119,7 +130,7 @@ def generate_launch_description():
                 period=4.0,
                 actions=[
                     _spawn_controller("joint_state_broadcaster"),
-                    _spawn_controller("arm_trajectory_controller"),
+                    _spawn_controller(arm_controller),
                     _spawn_controller("gripper_controller"),
                 ],
             ),

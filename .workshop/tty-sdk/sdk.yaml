@@ -1,0 +1,7 @@
+name: tty-sdk
+plugs:
+  hardware-tty:
+    interface: custom-device
+    subsystem: tty
+    vendorid: "1a86"
+    productid: "55d3"

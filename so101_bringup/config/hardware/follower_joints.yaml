@@ -1,67 +1,67 @@
 joints:
   shoulder_pan:
     id: 1
-    homing_offset: 530
-    range_min: 866
-    range_max: 3231
-    p_coefficient: 16 # may be original 16 is too much, set 12
+    homing_offset: -1786
+    range_min: 912
+    range_max: 3461
+    p_coefficient: 50 # may be original 16 is too much, set 12
     i_coefficient: 0
-    d_coefficient: 32
+    d_coefficient: 16
     return_delay_time: 0
     acceleration: 254
 
   shoulder_lift:
     id: 2
-    homing_offset: -369
-    range_min: 896
-    range_max: 3211
-    p_coefficient: 16
-    i_coefficient: 0
-    d_coefficient: 32
+    homing_offset: -901
+    range_min: 826
+    range_max: 3221
+    p_coefficient: 64
+    i_coefficient: 4
+    d_coefficient: 8
     return_delay_time: 0
     acceleration: 254
 
   elbow_flex:
     id: 3
-    homing_offset: -98
-    range_min: 866
-    range_max: 3066
-    p_coefficient: 16
-    i_coefficient: 0
-    d_coefficient: 32
+    homing_offset: 1276
+    range_min: 885
+    range_max: 3107
+    p_coefficient: 64
+    i_coefficient: 4
+    d_coefficient: 8
     return_delay_time: 0
     acceleration: 254
 
   wrist_flex:
     id: 4
-    homing_offset: 725
-    range_min: 1039
-    range_max: 3121
-    p_coefficient: 16
+    homing_offset: 1772
+    range_min: 858
+    range_max: 3230
+    p_coefficient: 32
     i_coefficient: 0
-    d_coefficient: 32
+    d_coefficient: 16
     return_delay_time: 0
     acceleration: 254
 
   wrist_roll:
     id: 5
-    homing_offset: 1704
-    range_min: 123
-    range_max: 3955
-    p_coefficient: 16
+    homing_offset: -910
+    range_min: 0
+    range_max: 4095
+    p_coefficient: 32
     i_coefficient: 0
-    d_coefficient: 32
+    d_coefficient: 16
     return_delay_time: 0
     acceleration: 254
 
   gripper:
     id: 6
-    homing_offset: 1573
-    range_min: 2027
-    range_max: 3483
-    p_coefficient: 16
+    homing_offset: 1744
+    range_min: 2012
+    range_max: 3517
+    p_coefficient: 32
     i_coefficient: 0
-    d_coefficient: 32
+    d_coefficient: 16
     return_delay_time: 0
     acceleration: 254
     max_torque_limit: 500

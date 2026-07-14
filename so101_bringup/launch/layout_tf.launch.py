@@ -19,12 +19,14 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("world_frame", default_value="world"),
 
+        # Match the Gazebo sim layout (gazebo_teleop_sim.launch.py): the two
+        # arms sit side-by-side along Y, facing the same way.
         DeclareLaunchArgument("follower_x", default_value="0.0"),
-        DeclareLaunchArgument("follower_y", default_value="0.0"),
+        DeclareLaunchArgument("follower_y", default_value="-0.35"),
         DeclareLaunchArgument("follower_z", default_value="0.0"),
 
-        DeclareLaunchArgument("leader_x", default_value="-0.5"),
-        DeclareLaunchArgument("leader_y", default_value="-0.5"),
+        DeclareLaunchArgument("leader_x", default_value="0.0"),
+        DeclareLaunchArgument("leader_y", default_value="0.35"),
         DeclareLaunchArgument("leader_z", default_value="0.0"),
 
         Node(
@@ -43,7 +45,7 @@ def generate_launch_description():
             name="world_to_leader_base",
             arguments=[
                 leader_x, leader_y, leader_z, 
-                "1.57", "0.0", "0.0",
+                "0.0", "0.0", "0.0",
                 world_frame, 
                 "leader/base_link"],
         ),
