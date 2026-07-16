@@ -49,9 +49,6 @@ def generate_launch_description():
 
     use_teleop_rviz = LaunchConfiguration("use_teleop_rviz")
 
-    use_rerun = LaunchConfiguration("use_rerun")
-    rerun_env_dir = LaunchConfiguration("rerun_env_dir")
-    rerun_delay_s = LaunchConfiguration("rerun_delay_s")
 
     # --- Include leader bringup ---
     leader_launch = IncludeLaunchDescription(
@@ -141,31 +138,6 @@ def generate_launch_description():
         arguments=["-d", teleop_rviz],
         condition=IfCondition(use_teleop_rviz),
         output="screen",
-    )
-
-    # --- Launch Rerun
-
-    rerun_bridge_proc = ExecuteProcess(
-        cmd=[
-            "pixi",
-            "run",
-            "bridge",
-            "--",
-            # "--wrist", rerun_wrist,
-            # "--overhead", rerun_overhead,
-            # "--joint-states", rerun_joint_states,
-            # "--forward-commands", rerun_forward_cmds,
-            # "--joint-trajectory", rerun_joint_traj,
-        ],
-        cwd=rerun_env_dir,
-        additional_env={"PYTHONUNBUFFERED": "1"},
-        condition=IfCondition(use_rerun),
-        output="screen",
-    )
-
-    rerun_start = TimerAction(
-        period=rerun_delay_s,
-        actions=[rerun_bridge_proc],
     )
 
     # --- Defaults for files ---

@@ -173,11 +173,6 @@ def generate_launch_description():
     )
 
     # --- 3a. Real overhead camera (usb_cam) ---------------------------------
-    # NOTE: the shipped depth_safety_stop.launch.py uses `v4l2_camera`, which is
-    # NOT installed in the workshop container (and not declared in
-    # so101_bringup/package.xml). `usb_cam` IS installed and is the declared
-    # dependency. It publishes `image_raw` in the node namespace ->
-    # /static_camera/image_raw, the same topic the depth node consumes.
     camera = Node(
         package="usb_cam",
         executable="usb_cam_node_exe",

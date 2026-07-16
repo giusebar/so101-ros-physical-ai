@@ -29,9 +29,17 @@ def generate_launch_description():
     follower_rviz = LaunchConfiguration("follower_rviz")
 
     arm_controller = LaunchConfiguration("arm_controller")  # arm_trajectory_controller|arm_forward_controller
+    gripper_mode = LaunchConfiguration("gripper_mode")  # parallel_action|forward_position
+    gate_input_topic = LaunchConfiguration("gate_input_topic")
 
     teleop_params_file = LaunchConfiguration("teleop_params_file")
     teleop_delay_s = LaunchConfiguration("teleop_delay_s")
+
+    # TF frame prefix must match the namespace so the URDF link names line up
+    # with what layout_tf.launch.py (and anything else publishing TF for
+    # "leader/base_link"/"follower/base_link") expects.
+    leader_frame_prefix = PythonExpression(["'", leader_ns, "' + '/'"])
+    follower_frame_prefix = PythonExpression(["'", follower_ns, "' + '/'"])
 
     # --- Include leader bringup ---
     leader_launch = IncludeLaunchDescription(
@@ -42,6 +50,7 @@ def generate_launch_description():
             "namespace": leader_ns,
             "hardware_type": hardware_type,
             "usb_port": leader_usb,
+            "frame_prefix": leader_frame_prefix,
             "joint_config_file": leader_joint_cfg,
             "controller_config_file": leader_ctrl_cfg,
             "use_rviz": leader_rviz,
@@ -63,6 +72,7 @@ def generate_launch_description():
             "namespace": follower_ns,
             "hardware_type": hardware_type,
             "usb_port": follower_usb,
+            "frame_prefix": follower_frame_prefix,
             "joint_config_file": follower_joint_cfg,
             "controller_config_file": follower_ctrl_cfg,
             "use_rviz": follower_rviz,
@@ -79,6 +89,8 @@ def generate_launch_description():
             "leader_namespace": leader_ns,
             "follower_namespace": follower_ns,
             "arm_controller": arm_controller,
+            "gripper_mode": gripper_mode,
+            "gate_input_topic": gate_input_topic,
             # optionally pass params_file if you want
             "params_file": teleop_params_file,
         }.items(),
@@ -110,7 +122,7 @@ def generate_launch_description():
             "follower_split_controllers.yaml",
         ]
     )
-    default_teleop_params = PathJoinSubstitution([FindPackageShare("so101_teleop"), "config", "teleop.yaml"])
+    default_teleop_params = PathJoinSubstitution([FindPackageShare("so101_teleop"), "config", "teleop_split.yaml"])
 
     return LaunchDescription(
         [
@@ -129,6 +141,8 @@ def generate_launch_description():
             DeclareLaunchArgument("leader_rviz", default_value="false"),
             DeclareLaunchArgument("follower_rviz", default_value="false"),
             DeclareLaunchArgument("arm_controller", default_value="arm_trajectory_controller"),
+            DeclareLaunchArgument("gripper_mode", default_value="parallel_action"),
+            DeclareLaunchArgument("gate_input_topic", default_value=""),
             DeclareLaunchArgument("teleop_params_file", default_value=default_teleop_params),
             DeclareLaunchArgument("teleop_delay_s", default_value="2.0"),
             leader_launch,

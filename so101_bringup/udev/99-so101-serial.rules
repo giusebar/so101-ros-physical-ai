@@ -1,0 +1,25 @@
+# Stable device symlinks for the SO-101 leader/follower Feetech USB-serial
+# adapters (WCH "USB Single Serial", vendor:product 1a86:55d3).
+#
+# Kernel-assigned /dev/ttyACM* numbering is NOT stable across replug/reboot —
+# whichever board the kernel enumerates first gets ttyACM0. These rules key
+# off each board's unique USB serial number instead, so /dev/so101_leader and
+# /dev/so101_follower always point at the correct physical arm regardless of
+# plug order.
+#
+# NOTE: this file must be installed where udevd actually runs. In this
+# project udevd runs on the HOST (the workshop container does not run its own
+# udev daemon), so this rule must be copied to the host's
+# /etc/udev/rules.d/ and reloaded there — installing it only inside the
+# so101_bringup colcon package/container is not sufficient by itself.
+# See docs/demo_runbook.md for the install steps.
+#
+# Find each board's serial with (inside the container, or on the host):
+#   udevadm info -a -n /dev/ttyACM0 | grep 'ATTRS{serial}' | head -1
+#
+# Current known serials (update if boards are swapped/replaced):
+#   leader:   5AB9065439
+#   follower: 5AB9064894
+
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d3", ATTRS{serial}=="5AB9065439", SYMLINK+="so101_leader", MODE="0660", GROUP="dialout"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d3", ATTRS{serial}=="5AB9064894", SYMLINK+="so101_follower", MODE="0660", GROUP="dialout"

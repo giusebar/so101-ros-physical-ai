@@ -6,16 +6,17 @@ manual, per-terminal decomposition in ``docs/demo_runbook.md`` (§4.2), packaged
 here as a single launch so it can be run alongside (i.e. instead of, one at a
 time) the MoveIt Servo demo. Brings up, in order:
 
-  1. Real leader + follower arms (``so101_bringup`` ``leader.launch.py`` /
-     ``follower_split.launch.py``, ``hardware_type:=real``). The follower runs
-     the split controllers with ``arm_controller:=arm_trajectory_controller``
-     (5 arm joints) so the safety gate can freeze the arm with a JointTrajectory
-     hold, plus ``gripper_controller`` for the gripper.
-  2. ``teleop_split`` (``so101_teleop``): reads ``/leader/joint_states`` and
-     mirrors the leader's *absolute* joint positions to the follower as a
-     JointTrajectory. Its arm trajectory is routed to the safety gate INPUT
-     (``/safety/follower/arm_trajectory_in``) instead of straight at the
-     controller. The gripper is forwarded directly (outside the gate).
+  1 & 2. Real leader + follower arms + ``teleop_split``, all via
+     ``so101_bringup``'s ``teleop_split.launch.py`` (which itself brings up
+     ``leader.launch.py`` / ``follower_split.launch.py`` and
+     ``so101_teleop``'s ``teleop_split.launch.py``). Configured with
+     ``arm_controller:=arm_trajectory_controller`` (5 arm joints) so the
+     safety gate can freeze the arm with a JointTrajectory hold, plus
+     ``gripper_mode:=forward_position`` (the gripper_controller here is a
+     plain ForwardCommandController, not a GripperActionController) and
+     ``gate_input_topic`` set so the arm trajectory is routed to the safety
+     gate INPUT (``/safety/follower/arm_trajectory_in``) instead of straight
+     at the controller. The gripper is forwarded directly (outside the gate).
   3. ``trajectory_safety_gate`` (``so101_teleop``): passes the arm trajectory
      through to ``/follower/arm_trajectory_controller/joint_trajectory`` while
      ``/safety/protective_stop`` is false, and freezes the follower (holds the
@@ -52,7 +53,6 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
-    TimerAction,
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -87,74 +87,35 @@ def generate_launch_description():
     arm_trajectory_topic = "/follower/arm_trajectory_controller/joint_trajectory"
 
     bringup_share = get_package_share_directory("so101_bringup")
-    teleop_share = get_package_share_directory("so101_teleop")
 
     arm_joints = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
 
-    # --- 1. Real arms ---------------------------------------------------
-    leader = IncludeLaunchDescription(
+    # --- 1 & 2. Real arms + teleop_split ------------------------------------
+    # Reuses so101_bringup's teleop_split.launch.py (leader + follower_split +
+    # teleop_split), which already knows how to bring up the split controllers
+    # and mirror the leader to the follower. We only override:
+    #  - arm_controller: JointTrajectory controller, so the safety gate can
+    #    freeze the arm with a trajectory hold.
+    #  - gripper_mode: forward_position (the gripper_controller here is a
+    #    plain ForwardCommandController, not a GripperActionController, so
+    #    the default parallel_action mode would silently do nothing).
+    #  - gate_input_topic: routes teleop_split's arm trajectory to the safety
+    #    gate's input instead of straight at the controller.
+    teleop_split_bringup = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(bringup_share, "launch", "leader.launch.py")
+            os.path.join(bringup_share, "launch", "teleop_split.launch.py")
         ),
         launch_arguments={
-            "namespace": "leader",
             "hardware_type": "real",
-            "usb_port": leader_usb,
-            "frame_prefix": "leader/",
-            "use_rviz": "false",
-            "controller_config_file": os.path.join(
-                bringup_share, "config", "ros2_control", "leader_controllers.yaml"
-            ),
-        }.items(),
-    )
-
-    # Split controllers with the JointTrajectory arm controller so the safety
-    # gate can freeze the arm with a trajectory hold.
-    follower = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(bringup_share, "launch", "follower_split.launch.py")
-        ),
-        launch_arguments={
-            "namespace": "follower",
-            "hardware_type": "real",
-            "usb_port": follower_usb,
-            "frame_prefix": "follower/",
+            "leader_usb_port": leader_usb,
+            "follower_usb_port": follower_usb,
+            "leader_rviz": "false",
+            "follower_rviz": "false",
             "arm_controller": "arm_trajectory_controller",
-            "use_rviz": "false",
-            # Must be set explicitly (launch configs are not scoped per include;
-            # leader.launch.py above already set controller_config_file).
-            "controller_config_file": os.path.join(
-                bringup_share,
-                "config",
-                "ros2_control",
-                "follower_split_controllers.yaml",
-            ),
+            "gripper_mode": "forward_position",
+            "gate_input_topic": gate_input_topic,
+            "teleop_delay_s": teleop_start_delay,
         }.items(),
-    )
-
-    # --- 2. teleop_split (leader absolute-position mirror -> gate input) -----
-    teleop_split = Node(
-        package="so101_teleop",
-        executable="teleop_split",
-        name="arm_gripper_teleop",
-        output="screen",
-        parameters=[
-            os.path.join(teleop_share, "config", "teleop_split.yaml"),
-            {
-                "arm_mode": "joint_trajectory",
-                "leader_topic": "/leader/joint_states",
-                # Route the arm trajectory THROUGH the safety gate.
-                "jtc_topic": gate_input_topic,
-                # Gripper is outside the gate; forward its position directly to
-                # the gripper ForwardCommandController's /commands topic (same
-                # topic the Servo demo's leader_servo_jog uses).
-                "gripper_mode": "forward_position",
-                "gripper_fwd_topic": "/follower/gripper_controller/commands",
-                "arm_joints": arm_joints,
-                "gripper_joint": "gripper",
-                "use_sim_time": False,
-            },
-        ],
     )
 
     # --- 3. Trajectory safety gate ------------------------------------------
@@ -244,9 +205,12 @@ def generate_launch_description():
         output="screen",
     )
 
-    # Camera + depth can start immediately. teleop_split + gate need the
-    # follower controllers (arm_trajectory_controller + gripper_controller) up
-    # before they can publish to them.
+    # Camera + depth can start immediately. teleop_split (inside
+    # teleop_split_bringup) needs the follower controllers up first, which is
+    # handled internally via its own teleop_delay_s (fed from
+    # teleop_start_delay below). The safety gate can start immediately - it
+    # just caches /follower/joint_states and passes through messages once
+    # teleop_split starts publishing.
     return LaunchDescription(
         [
             DeclareLaunchArgument(
@@ -283,18 +247,14 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "teleop_start_delay",
                 default_value="8.0",
-                description="Seconds to wait before starting teleop_split + the "
-                "safety gate (follower controllers need to spawn first).",
+                description="Seconds to wait before starting teleop_split "
+                "(follower controllers need to spawn first).",
             ),
-            leader,
-            follower,
+            teleop_split_bringup,
+            safety_gate,
             layout_tf,
-            camera,
             depth_stop,
             viewer,
             rviz_node,
-            TimerAction(
-                period=teleop_start_delay, actions=[safety_gate, teleop_split]
-            ),
         ]
     )
