@@ -1,0 +1,51 @@
+name: depthanything-model
+base: core24
+version: '2024.10.1'
+summary: Depth Anything V2 (Small) ONNX weights as a content snap
+description: |
+  Ships the Depth Anything V2 (Small) ONNX model and exposes it through the
+  snap `content` interface so that consumer snaps (e.g. `depthanything`) can
+  mount the weights read-only at runtime instead of bundling them.
+
+  This snap has no apps; it only provides the `depthanything-model` content
+  slot. It is installed automatically as the `default-provider` when you run
+  `snap install depthanything`, but it can also be installed on its own:
+
+      snap install depthanything-model
+
+  The model is pulled from the Hugging Face ONNX community mirror at build time:
+      onnx-community/depth-anything-v2-small : onnx/model.onnx
+
+grade: stable
+confinement: strict
+
+slots:
+  # Consumers connect their content plug to this slot to see the weights under
+  # their own $SNAP/models directory.
+  depthanything-model:
+    interface: content
+    content: depthanything-model
+    read:
+      - $SNAP/models
+
+parts:
+  model:
+    plugin: nil
+    build-packages:
+      - curl
+      - ca-certificates
+    override-build: |
+      set -eux
+      mkdir -p "${CRAFT_PART_INSTALL}/models"
+      model="${CRAFT_PART_INSTALL}/models/depth_anything_v2_small.onnx"
+      curl -fL --retry 5 --retry-delay 2 \
+        "https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/main/onnx/model.onnx?download=true" \
+        -o "${model}"
+      # Fail early if the download produced an empty file or an HTML error page
+      # (the model is tens of MB; a redirect/error page would be a few KB and
+      # start with '<').
+      test -s "${model}"
+      size=$(stat -c%s "${model}")
+      test "${size}" -gt 1000000 || { echo "Model too small (${size} bytes)" >&2; exit 1; }
+      first=$(head -c 1 "${model}")
+      test "${first}" != "<" || { echo "Downloaded an HTML error page, not the model" >&2; exit 1; }

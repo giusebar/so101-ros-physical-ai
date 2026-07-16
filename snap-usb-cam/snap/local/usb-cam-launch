@@ -1,0 +1,56 @@
+#!/bin/bash
+# snap/local/usb-cam-launch
+#
+# Entry point for the `usb-cam` daemon app. Reads the runtime.env file
+# rendered by the configure hook (snap/hooks/configure) and execs the
+# upstream usb_cam node with a matching params.yaml.
+#
+# This script runs inside the ros2-jazzy extension's command-chain, so the
+# ROS 2 underlay/overlay environment (AMENT_PREFIX_PATH, LD_LIBRARY_PATH,
+# PYTHONPATH, ...) is already sourced. The `ros2` CLI (ros2cli/ros2run) is
+# NOT staged in this snap (usb_cam's package.xml doesn't depend on it), so we
+# exec the installed executable directly instead of going through
+# `ros2 run`.
+set -eu
+
+PARAMS_FILE="$SNAP_DATA/params.yaml"
+RUNTIME_ENV="$SNAP_DATA/runtime.env"
+USB_CAM_NODE_EXE="$SNAP/opt/ros/snap/lib/usb_cam/usb_cam_node_exe"
+
+# cv_bridge (via OpenCV) dlopen()s liblapack.so.3/libblas.so.3 at runtime.
+# The liblapack3/libblas3 debs install those under
+# usr/lib/<triplet>/lapack|blas/, which isn't on the default library search
+# path, so add it explicitly here (triplet varies by arch).
+case "${SNAP_ARCH:-}" in
+  amd64) triplet=x86_64-linux-gnu ;;
+  arm64) triplet=aarch64-linux-gnu ;;
+  *) triplet="" ;;
+esac
+if [ -n "$triplet" ]; then
+  export LD_LIBRARY_PATH="$SNAP/usr/lib/$triplet/lapack:$SNAP/usr/lib/$triplet/blas:${LD_LIBRARY_PATH:-}"
+fi
+
+if [ ! -f "$PARAMS_FILE" ]; then
+  echo "usb-cam: no configuration found yet at $PARAMS_FILE" >&2
+  echo "usb-cam: run 'snap set $SNAP_NAME device=/dev/videoN' to configure and start the service" >&2
+  exit 1
+fi
+
+# NAMESPACE, NODE_NAME, ROS_DOMAIN_ID, RMW_IMPLEMENTATION (all optional)
+if [ -f "$RUNTIME_ENV" ]; then
+  # shellcheck disable=SC1090
+  . "$RUNTIME_ENV"
+fi
+
+set -- "$USB_CAM_NODE_EXE" --ros-args --params-file "$PARAMS_FILE"
+
+if [ -n "${NODE_NAME:-}" ]; then
+  set -- "$@" -r __node:="$NODE_NAME"
+fi
+
+if [ -n "${NAMESPACE:-}" ]; then
+  set -- "$@" -r __ns:="$NAMESPACE"
+fi
+
+echo "usb-cam: exec: $*" >&2
+exec "$@"

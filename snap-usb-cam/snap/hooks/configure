@@ -1,0 +1,120 @@
+#!/bin/bash
+# snap/hooks/configure
+#
+# Applies `snap set usb-cam <key>=<value>` configuration:
+#   1. fills in defaults (matching upstream usb_cam/config/params_1.yaml,
+#      minus camera_info_url which we leave unset by default)
+#   2. renders $SNAP_DATA/params.yaml (ros__parameters block for usb_cam_node_exe)
+#   3. renders $SNAP_DATA/runtime.env (namespace/node-name/DDS overrides for
+#      the launcher, which are not usb_cam ROS parameters)
+#   4. enables + (re)starts the daemon once a device has been configured
+#
+# See snap/local/usb-cam-launch for the consumer side.
+set -e
+
+get() {
+  # $1 = key, $2 = default
+  val="$(snapctl get "$1")"
+  if [ -z "$val" ]; then
+    val="$2"
+  fi
+  printf '%s' "$val"
+}
+
+get_bool() {
+  val="$(get "$1" "$2")"
+  case "$val" in
+    true|True|TRUE|1) printf 'true' ;;
+    false|False|FALSE|0) printf 'false' ;;
+    *)
+      echo "usb-cam: invalid boolean for $1: '$val' (expected true/false)" >&2
+      exit 1
+      ;;
+  esac
+}
+
+get_number() {
+  val="$(get "$1" "$2")"
+  case "$val" in
+    ''|*[!0-9.-]*)
+      echo "usb-cam: invalid number for $1: '$val'" >&2
+      exit 1
+      ;;
+  esac
+  printf '%s' "$val"
+}
+
+DEVICE="$(get device "")"
+WIDTH="$(get_number width 640)"
+HEIGHT="$(get_number height 480)"
+FRAMERATE="$(get_number framerate 30.0)"
+PIXEL_FORMAT="$(get pixel-format mjpeg2rgb)"
+AV_DEVICE_FORMAT="$(get av-device-format YUV422P)"
+IO_METHOD="$(get io-method mmap)"
+FRAME_ID="$(get frame-id camera)"
+CAMERA_NAME="$(get camera-name camera)"
+CAMERA_INFO_URL="$(get camera-info-url "")"
+
+BRIGHTNESS="$(get_number brightness -1)"
+CONTRAST="$(get_number contrast -1)"
+SATURATION="$(get_number saturation -1)"
+SHARPNESS="$(get_number sharpness -1)"
+GAIN="$(get_number gain -1)"
+
+AUTO_WHITE_BALANCE="$(get_bool auto-white-balance true)"
+WHITE_BALANCE="$(get_number white-balance 4000)"
+AUTOEXPOSURE="$(get_bool autoexposure true)"
+EXPOSURE="$(get_number exposure 100)"
+AUTOFOCUS="$(get_bool autofocus false)"
+FOCUS="$(get_number focus -1)"
+
+NAMESPACE="$(get namespace "")"
+NODE_NAME="$(get node-name "$CAMERA_NAME")"
+ROS_DOMAIN_ID="$(get ros-domain-id "")"
+RMW_IMPLEMENTATION="$(get rmw-implementation "")"
+
+mkdir -p "$SNAP_DATA"
+
+{
+  echo "/**:"
+  echo "  ros__parameters:"
+  echo "    video_device: \"$DEVICE\""
+  echo "    framerate: $FRAMERATE"
+  echo "    io_method: \"$IO_METHOD\""
+  echo "    pixel_format: \"$PIXEL_FORMAT\""
+  echo "    av_device_format: \"$AV_DEVICE_FORMAT\""
+  echo "    image_width: $WIDTH"
+  echo "    image_height: $HEIGHT"
+  echo "    frame_id: \"$FRAME_ID\""
+  echo "    camera_name: \"$CAMERA_NAME\""
+  if [ -n "$CAMERA_INFO_URL" ]; then
+    echo "    camera_info_url: \"$CAMERA_INFO_URL\""
+  fi
+  echo "    brightness: $BRIGHTNESS"
+  echo "    contrast: $CONTRAST"
+  echo "    saturation: $SATURATION"
+  echo "    sharpness: $SHARPNESS"
+  echo "    gain: $GAIN"
+  echo "    auto_white_balance: $AUTO_WHITE_BALANCE"
+  echo "    white_balance: $WHITE_BALANCE"
+  echo "    autoexposure: $AUTOEXPOSURE"
+  echo "    exposure: $EXPOSURE"
+  echo "    autofocus: $AUTOFOCUS"
+  echo "    focus: $FOCUS"
+} > "$SNAP_DATA/params.yaml"
+
+{
+  [ -n "$NAMESPACE" ] && echo "NAMESPACE=\"$NAMESPACE\""
+  [ -n "$NODE_NAME" ] && echo "NODE_NAME=\"$NODE_NAME\""
+  [ -n "$ROS_DOMAIN_ID" ] && echo "ROS_DOMAIN_ID=\"$ROS_DOMAIN_ID\""
+  [ -n "$RMW_IMPLEMENTATION" ] && echo "RMW_IMPLEMENTATION=\"$RMW_IMPLEMENTATION\""
+  true
+} > "$SNAP_DATA/runtime.env"
+
+if [ -n "$DEVICE" ]; then
+  snapctl set-health okay
+  snapctl start --enable "$SNAP_NAME.usb-cam" || true
+  snapctl restart "$SNAP_NAME.usb-cam" || true
+else
+  snapctl set-health waiting "waiting for 'snap set $SNAP_NAME device=/dev/videoN'"
+fi

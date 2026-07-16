@@ -1,0 +1,81 @@
+name: usb-cam
+title: usb-cam
+base: core24
+version: '0.8.1'
+license: BSD-3-Clause
+contact: https://github.com/ros-drivers/usb_cam/issues
+issues: https://github.com/ros-drivers/usb_cam/issues
+source-code: https://github.com/ros-drivers/usb_cam
+website: https://github.com/ros-drivers/usb_cam
+summary: ROS 2 driver for V4L2 USB cameras (Logitech C920 and others)
+description: |
+  Packages the upstream ros-drivers/usb_cam ROS 2 (Jazzy) node as a
+  strictly-confined, always-on snap. Runs `usb_cam_node_exe` as a systemd
+  daemon and takes its camera parameters (device, resolution, framerate,
+  pixel format, frame_id, camera_name, ROS namespace, ...) from `snap set`
+  instead of a hand-edited YAML file, so it can be configured and redeployed
+  the same way on any machine:
+
+      snap install usb-cam
+      snap connect usb-cam:camera
+      snap set usb-cam device=/dev/video4 width=1280 height=720 \
+        frame-id=cam_overhead camera-name=cam_overhead namespace=/static_camera
+
+  Run a second camera on the same host with snapd parallel installs:
+
+      snap install --name=usb-cam-wrist usb-cam
+
+  Publishes the standard usb_cam topics (`image_raw`, `image_raw/compressed`,
+  `camera_info`) under `<namespace>/<camera-name>` (or just `<namespace>`).
+
+grade: stable
+confinement: strict
+
+platforms:
+  amd64:
+  arm64:
+
+apps:
+  usb-cam:
+    extensions: [ros2-jazzy]
+    command: usr/bin/usb-cam-launch
+    daemon: simple
+    install-mode: disable
+    restart-condition: on-failure
+    restart-delay: 5s
+    plugs:
+      - camera
+      - network
+      - network-bind
+
+hooks:
+  configure:
+    plugs:
+      - camera
+
+package-repositories:
+  - type: apt
+    url: http://packages.ros.org/ros2/ubuntu
+    suites: [noble]
+    components: [main]
+    key-id: C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
+    key-server: keyserver.ubuntu.com
+
+parts:
+  usb-cam:
+    plugin: colcon
+    source: https://github.com/ros-drivers/usb_cam.git
+    source-tag: '0.8.1'
+    colcon-packages: [usb_cam]
+    # cv_bridge (via OpenCV) dlopen()s liblapack/libblas at runtime, but they
+    # live in usr/lib/<triplet>/lapack|blas/ which isn't on the default
+    # library search path -- staged explicitly and exposed via the app's
+    # LD_LIBRARY_PATH below.
+    stage-packages: [liblapack3, libblas3]
+
+  launcher:
+    plugin: nil
+    source: snap/local
+    override-build: |
+      mkdir -p "${CRAFT_PART_INSTALL}/usr/bin"
+      install -m 755 "${CRAFT_PART_SRC}/usb-cam-launch" "${CRAFT_PART_INSTALL}/usr/bin/usb-cam-launch"

@@ -1,0 +1,97 @@
+name: depthanything
+base: core24
+version: '0.1.0'
+summary: SO-101 Depth Anything V2 (Small) depth visualisation (ROS 2 Jazzy)
+description: |
+  CPU monocular depth visualisation for the SO-101 arm. Subscribes to a ROS 2
+  image topic, runs Depth Anything V2 (Small) with ONNX Runtime, and republishes
+  a colorised relative-depth image.
+
+  The model weights are NOT bundled in this snap. They are provided by the
+  separate `depthanything-model` content snap and mounted read-only at
+  $SNAP/models via the content interface. `depthanything-model` is installed
+  automatically as the default provider:
+
+      snap install depthanything
+
+  Runs as an always-on daemon (like `usb-cam`). Configure it with `snap set`
+  instead of launch arguments, e.g.:
+
+      snap set depthanything input-image-topic:=/my/camera/image_raw
+      snap set depthanything output-image-topic:=/camera/depth/visualization
+      snap set depthanything min-period-s=0.1
+
+  Other options: model-input-size, publish-width, publish-height,
+  intra-op-threads, namespace, node-name, ros-domain-id, rmw-implementation.
+
+  Check status with `snap services depthanything` / `snap logs depthanything`.
+
+grade: stable
+confinement: strict
+
+apps:
+  depthanything:
+    extensions: [ros2-jazzy]
+    command: usr/bin/depthanything-launch
+    daemon: simple
+    install-mode: disable
+    restart-condition: on-failure
+    restart-delay: 5s
+    plugs:
+      - network
+      - network-bind
+
+hooks:
+  configure: {}
+
+plugs:
+  # Mounts the ONNX weights from the depthanything-model snap under
+  # $SNAP/models. default-provider makes `snap install depthanything` also
+  # install the model snap and auto-connect this content interface.
+  depthanything-model:
+    interface: content
+    content: depthanything-model
+    target: $SNAP/models
+    default-provider: depthanything-model
+
+parts:
+  depth-demo:
+    plugin: colcon
+    # snapcraft.yaml lives at so101_depth_demo/snap/snapcraft.yaml, so the
+    # project root IS the so101_depth_demo package directory -- "." is just
+    # this one ROS package, so colcon/rosdep never sees unrelated sibling
+    # packages (e.g. so101_description) in the wider monorepo.
+    source: .
+    stage-packages:
+      - libgomp1
+      # opencv-python-headless (cv2) dlopen()s liblapack.so.3/libblas.so.3 at
+      # runtime for linear-algebra ops. The debs install those under
+      # usr/lib/<triplet>/lapack|blas/, which isn't on the default library
+      # search path -- staged here and exposed via LD_LIBRARY_PATH in
+      # snap/local/depthanything-launch (same fix as the usb-cam snap's
+      # cv_bridge dependency).
+      - liblapack3
+      - libblas3
+    build-packages:
+      - python3-pip
+    # colcon builds the ROS package; then install the pure-Python inference
+    # dependencies (not available as rosdeps) into the Debian dist-packages
+    # path so they are on the default Python import path inside the snap.
+    override-build: |
+      craftctl default
+      pip3 install \
+        --break-system-packages \
+        --no-compile \
+        --target="${CRAFT_PART_INSTALL}/usr/lib/python3/dist-packages" \
+        "onnxruntime" \
+        "numpy" \
+        "opencv-python-headless"
+
+  launcher:
+    plugin: dump
+    source: snap/local
+    organize:
+      depthanything-launch: usr/bin/depthanything-launch
+    override-build: |
+      craftctl default
+      chmod +x "${CRAFT_PART_INSTALL}/depthanything-launch"

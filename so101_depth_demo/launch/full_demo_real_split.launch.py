@@ -176,22 +176,22 @@ def generate_launch_description():
     )
 
     # --- 4a. Real overhead camera (usb_cam) ---------------------------------
-    camera = Node(
-        package="usb_cam",
-        executable="usb_cam_node_exe",
-        name="cam_overhead",
-        namespace="static_camera",
-        output="screen",
-        parameters=[
-            os.path.join(bringup_share, "config", "cameras", "so101_usb_cam.yaml"),
-            {
-                "video_device": camera_device,
-                "camera_name": "cam_overhead",
-                "frame_id": "cam_overhead",
-                "use_sim_time": False,
-            },
-        ],
-    )
+    #camera = Node(
+    #    package="usb_cam",
+    #    executable="usb_cam_node_exe",
+    #    name="cam_overhead",
+    #    namespace="static_camera",
+    #    output="screen",
+    #    parameters=[
+    #        os.path.join(bringup_share, "config", "cameras", "so101_usb_cam.yaml"),
+    #        {
+    #            "video_device": camera_device,
+    #            "camera_name": "cam_overhead",
+    #            "frame_id": "cam_overhead",
+    #            "use_sim_time": False,
+    #        },
+    #    ],
+    #)
 
     # --- 4b. Depth proximity -> protective stop -----------------------------
     depth_stop = Node(

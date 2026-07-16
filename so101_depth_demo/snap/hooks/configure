@@ -1,0 +1,83 @@
+#!/bin/bash
+# snap/hooks/configure
+#
+# Applies `snap set depthanything <key>=<value>` configuration:
+#   1. fills in defaults (matching so101_depth_demo/launch/depth_demo.launch.py)
+#   2. renders $SNAP_DATA/params.yaml (ros__parameters block for
+#      depth_anything_node) — model_path is NOT user-settable, it always
+#      points at the weights mounted by the depthanything-model content snap
+#   3. renders $SNAP_DATA/runtime.env (namespace/node-name/DDS overrides for
+#      the launcher, which are not depth_anything_node ROS parameters)
+#   4. gates startup on the model file actually being present (the content
+#      interface may not be connected yet, e.g. right after a --dangerous
+#      local install) and enables + (re)starts the daemon once it is
+#
+# See snap/local/depthanything-launch for the consumer side.
+set -e
+
+get() {
+  # $1 = key, $2 = default
+  val="$(snapctl get "$1")"
+  if [ -z "$val" ]; then
+    val="$2"
+  fi
+  printf '%s' "$val"
+}
+
+get_number() {
+  val="$(get "$1" "$2")"
+  case "$val" in
+    ''|*[!0-9.-]*)
+      echo "depthanything: invalid number for $1: '$val'" >&2
+      exit 1
+      ;;
+  esac
+  printf '%s' "$val"
+}
+
+MODEL_PATH="$SNAP/models/depth_anything_v2_small.onnx"
+
+INPUT_IMAGE_TOPIC="$(get input-image-topic /follower/image_raw)"
+OUTPUT_IMAGE_TOPIC="$(get output-image-topic /camera/depth/visualization)"
+MODEL_INPUT_SIZE="$(get_number model-input-size 308)"
+PUBLISH_WIDTH="$(get_number publish-width 256)"
+PUBLISH_HEIGHT="$(get_number publish-height 256)"
+MIN_PERIOD_S="$(get_number min-period-s 0.0)"
+INTRA_OP_THREADS="$(get_number intra-op-threads 0)"
+
+NAMESPACE="$(get namespace "")"
+NODE_NAME="$(get node-name "")"
+ROS_DOMAIN_ID="$(get ros-domain-id "")"
+RMW_IMPLEMENTATION="$(get rmw-implementation "")"
+
+mkdir -p "$SNAP_DATA"
+
+{
+  echo "/**:"
+  echo "  ros__parameters:"
+  echo "    model_path: \"$MODEL_PATH\""
+  echo "    input_image_topic: \"$INPUT_IMAGE_TOPIC\""
+  echo "    output_image_topic: \"$OUTPUT_IMAGE_TOPIC\""
+  echo "    model_input_size: $MODEL_INPUT_SIZE"
+  echo "    publish_width: $PUBLISH_WIDTH"
+  echo "    publish_height: $PUBLISH_HEIGHT"
+  echo "    min_period_s: $MIN_PERIOD_S"
+  echo "    intra_op_threads: $INTRA_OP_THREADS"
+} > "$SNAP_DATA/params.yaml"
+
+{
+  [ -n "$NAMESPACE" ] && echo "NAMESPACE=\"$NAMESPACE\""
+  [ -n "$NODE_NAME" ] && echo "NODE_NAME=\"$NODE_NAME\""
+  [ -n "$ROS_DOMAIN_ID" ] && echo "ROS_DOMAIN_ID=\"$ROS_DOMAIN_ID\""
+  [ -n "$RMW_IMPLEMENTATION" ] && echo "RMW_IMPLEMENTATION=\"$RMW_IMPLEMENTATION\""
+  true
+} > "$SNAP_DATA/runtime.env"
+
+if [ -f "$MODEL_PATH" ]; then
+  snapctl set-health okay
+  snapctl start --enable "$SNAP_NAME.depthanything" || true
+  snapctl restart "$SNAP_NAME.depthanything" || true
+else
+  snapctl set-health blocked \
+    "model not found at $MODEL_PATH -- connect the content interface: snap connect $SNAP_NAME:depthanything-model depthanything-model:depthanything-model"
+fi
