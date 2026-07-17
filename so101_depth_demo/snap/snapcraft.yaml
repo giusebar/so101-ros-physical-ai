@@ -5,7 +5,8 @@ summary: SO-101 Depth Anything V2 (Small) depth visualisation (ROS 2 Jazzy)
 description: |
   CPU monocular depth visualisation for the SO-101 arm. Subscribes to a ROS 2
   image topic, runs Depth Anything V2 (Small) with ONNX Runtime, and republishes
-  a colorised relative-depth image.
+  both a colorised relative-depth image (for viewing) and a raw normalised
+  depth map (32FC1, for downstream consumers such as so101_safety).
 
   The model weights are NOT bundled in this snap. They are provided by the
   separate `depthanything-model` content snap and mounted read-only at
@@ -19,6 +20,7 @@ description: |
 
       snap set depthanything input-image-topic:=/my/camera/image_raw
       snap set depthanything output-image-topic:=/camera/depth/visualization
+      snap set depthanything output-depth-topic:=/perception/depth
       snap set depthanything min-period-s=0.1
 
   Other options: model-input-size, publish-width, publish-height,
@@ -52,7 +54,7 @@ plugs:
     interface: content
     content: depthanything-model
     target: $SNAP/models
-    default-provider: depthanything-model
+    #default-provider: depthanything-model
 
 parts:
   depth-demo:

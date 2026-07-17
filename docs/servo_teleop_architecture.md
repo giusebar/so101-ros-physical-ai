@@ -49,9 +49,10 @@ Design principles:
 | Leader keyboard (sim) | `so101_teleop` | `leader_sim_keyboard` | Operator input → drives sim leader arm. Omitted on real HW. |
 | **Servo adapter** | `so101_teleop` | `leader_servo_jog` | Leader/follower joint error → `JointJog`; gripper passthrough; switches Servo to `JOINT_JOG`. |
 | MoveIt Servo | `moveit_servo` | `servo_node` | `JointJog`/`Twist`/`Pose` → safe position stream + status. |
-| Safety gate (JTC path) | `so101_teleop` | `trajectory_safety_gate` | Blocks/holds JointTrajectory stream on protective-stop. |
-| Depth proximity | `so101_depth_demo` | `depth_proximity_node` | Camera image → depth → `Bool` protective-stop + debug overlay. |
-| Depth viz (demo) | `so101_depth_demo` | `depth_anything_node` | Camera image → colorised depth image (visualisation only). |
+| Safety gate (JTC path) | `so101_safety` | `trajectory_safety_gate` | Blocks/holds JointTrajectory stream on protective-stop. |
+| Safety bridge (Servo path) | `so101_safety` | `safety_pause_bridge` | Bool → Servo `pause_servo` service. |
+| Depth safety monitor | `so101_safety` | `depth_safety_monitor` | Consumes `/perception/depth` → `Bool` protective-stop + debug overlay. No ML/vision deps (pure topic consumer). |
+| Depth inference | `so101_depth_demo` | `depth_anything_node` | Camera image → ONNX depth inference → colorised viz (`/camera/depth/visualization`) + raw depth (`/perception/depth`). Runs once; both `depth_safety_monitor` and viewers consume its output. |
 | Controllers | `controller_manager` | `ros2_control_node` / `gz_ros_control` | Execute commands, publish joint states. |
 
 Legacy (retired on the Servo path): `teleop_split` (direct joint-copy bridge).
@@ -187,14 +188,26 @@ stop halts the arm* differs by motion path.
 
 ```mermaid
 flowchart LR
-    CAM["v4l2_camera_node<br/>(USB camera)"] -->|"/static_camera/image_raw<br/>sensor_msgs/Image"| PROX["depth_proximity_node<br/>Depth Anything V2 (ONNX, CPU)"]
-    PROX -->|"/safety/protective_stop<br/>std_msgs/Bool"| GATE["safety integration"]
-    PROX -->|"/safety/depth_debug_image<br/>sensor_msgs/Image"| VIEW["rqt_image_view (ROI overlay)"]
+    CAM["usb_cam / usb-cam snap<br/>(USB camera)"] -->|"/static_camera/image_raw<br/>sensor_msgs/Image"| DA["depth_anything_node<br/>(so101_depth_demo / depthanything snap)<br/>Depth Anything V2 (ONNX, CPU)"]
+    DA -->|"/perception/depth<br/>sensor_msgs/Image (32FC1)"| MON["depth_safety_monitor<br/>(so101_safety)"]
+    DA -->|"/camera/depth/visualization<br/>sensor_msgs/Image (rgb8)"| VIZ["rqt_image_view (colorised depth)"]
+    MON -->|"/safety/protective_stop<br/>std_msgs/Bool"| GATE["safety enforcement (so101_safety)"]
+    MON -->|"/safety/depth_debug_image<br/>sensor_msgs/Image (mono8)"| VIEW["image_view (ROI overlay)"]
 ```
 
-`depth_proximity_node` logic: run monocular depth, compare a center ROI against
-the surrounding background depth; if the ROI is clearly *nearer* than the scene
-over `frames_to_block` consecutive frames, assert `True`; release after
+The model runs **once**: `depth_anything_node` (packaged standalone as the
+`depthanything` snap) does the ONNX inference and publishes both the
+colorised visualisation and the raw normalised depth. `depth_safety_monitor`
+(in `so101_safety`) is a **pure topic consumer** — no ONNX/OpenCV dependency
+— that does the ROI/background-reference/hysteresis logic on the already-computed
+depth map and publishes `/safety/protective_stop`. This is a deliberate
+separation of concerns: `so101_depth_demo` only ever does perception/inference;
+`so101_safety` owns deciding *and* enforcing protective stops (and is the home
+for future safety behaviours, e.g. diagnostics/watchdogs).
+
+`depth_safety_monitor` logic: compare a center ROI against the surrounding
+background depth; if the ROI is clearly *nearer* than the scene over
+`frames_to_block` consecutive frames, assert `True`; release after
 `frames_to_clear` clear frames (hysteresis). Depth Anything gives *relative*
 depth, so triggering is relative-to-background, not an absolute distance.
 
@@ -202,23 +215,26 @@ depth, so triggering is relative-to-background, not an absolute distance.
 
 | Topic | Type | Dir | Notes |
 |---|---|---|---|
-| `<input_image_topic>` (e.g. `/static_camera/image_raw`) | `sensor_msgs/Image` | in | rgb8/bgr8/mono8 |
-| `/safety/protective_stop` | `std_msgs/Bool` | out | `True` = stop requested |
-| `/safety/depth_debug_image` | `sensor_msgs/Image` | out | colorised depth + ROI (red=STOP, green=clear) |
+| `<input_image_topic>` (e.g. `/static_camera/image_raw`) | `sensor_msgs/Image` | in (to `depth_anything_node`) | rgb8/bgr8/mono8 |
+| `/perception/depth` | `sensor_msgs/Image` (32FC1) | out (`depth_anything_node`) / in (`depth_safety_monitor`) | normalised `[0,1]`, higher = closer |
+| `/camera/depth/visualization` | `sensor_msgs/Image` (rgb8) | out (`depth_anything_node`) | colorised depth, for viewing only |
+| `/safety/protective_stop` | `std_msgs/Bool` | out (`depth_safety_monitor`) | `True` = stop requested |
+| `/safety/depth_debug_image` | `sensor_msgs/Image` (mono8) | out (`depth_safety_monitor`) | depth + ROI marker (optional) |
 
-| Parameter | Default | Meaning |
-|---|---|---|
-| `model_path` | `~/models/depth_anything_v2_small.onnx` | **AI model swap point** (any Depth Anything V2 ONNX) |
-| `roi` | `0.25,0.2,0.75,0.85` | normalised center region checked |
-| `near_margin` | `0.15` | how much nearer than background counts as "near" |
-| `min_area_ratio` | `0.12` | fraction of ROI near → candidate stop |
-| `frames_to_block` / `frames_to_clear` | `2` / `3` | hysteresis |
-| `inference_hz` | `10.0` | CPU throttle |
-| `intra_op_threads` | `0` | ONNX Runtime threads (0 = default) |
+| Parameter | Node | Default | Meaning |
+|---|---|---|---|
+| `model_path` | `depth_anything_node` | `~/models/depth_anything_v2_small.onnx` | **AI model swap point** (any Depth Anything V2 ONNX) |
+| `roi` | `depth_safety_monitor` | `0.25,0.2,0.75,0.85` | normalised center region checked |
+| `near_margin` | `depth_safety_monitor` | `0.15` | how much nearer than background counts as "near" |
+| `min_area_ratio` | `depth_safety_monitor` | `0.12` | fraction of ROI near → candidate stop |
+| `frames_to_block` / `frames_to_clear` | `depth_safety_monitor` | `2` / `3` | hysteresis |
+| `monitor_hz` | `depth_safety_monitor` | `10.0` | processing rate (cheap now — no inference here) |
+| `intra_op_threads` | `depth_anything_node` | `0` | ONNX Runtime threads (0 = default) |
 
 ### 5.3 Two ways to halt the arm
 
-**A. JointTrajectory path (existing, JTC-based) — `trajectory_safety_gate`.**
+**A. JointTrajectory path (existing, JTC-based) — `trajectory_safety_gate`
+(`so101_safety`).**
 An in-line gate sits between a teleop bridge and the JTC. It forwards
 trajectories only while clear; on stop it blocks the stream and publishes a
 *hold* trajectory (current follower positions) so the arm freezes in place.
@@ -231,16 +247,18 @@ trajectories only while clear; on stop it blocks the stream and publishes a
 | `/follower/arm_trajectory_controller/joint_trajectory` | `trajectory_msgs/JointTrajectory` | out (to JTC) |
 
 This path requires the **JTC** (`arm_trajectory_controller`) and does **not**
-apply to the Servo path.
+apply to the Servo path. Brought up via `so101_safety`'s
+`safety_stop_jtc.launch.py` (monitor + gate together).
 
-**B. Servo path (recommended with this stack) — `pause_servo`.**
+**B. Servo path (recommended with this stack) — `safety_pause_bridge`
+(`so101_safety`) → `pause_servo`.**
 Servo already owns the follower and stops smoothly. A tiny bridge subscribes
 `/safety/protective_stop` and calls the Servo pause service — no trajectory
 interception needed:
 
 ```mermaid
 flowchart LR
-    PROX["/safety/protective_stop (Bool)"] --> BR["safety_pause_bridge"]
+    MON["/safety/protective_stop (Bool)"] --> BR["safety_pause_bridge (so101_safety)"]
     BR -->|"pause_servo: SetBool(true/false)"| SERVO["/follower/servo_node<br/>pause_servo"]
     SERVO -->|"halts /follower/arm_forward_controller/commands"| ARM["follower arm"]
 ```
@@ -250,20 +268,21 @@ flowchart LR
 | `/safety/protective_stop` | `std_msgs/Bool` | in |
 | `/follower/servo_node/pause_servo` | `std_srvs/srv/SetBool` | out (call `true` on stop, `false` on clear) |
 
-> Implementation note: this bridge is ~30 lines (Bool sub → SetBool client with
-> edge detection) and can live in `so101_teleop`, or be folded into
-> `leader_servo_jog` as an optional feature. It is the clean, Servo-native
-> replacement for `trajectory_safety_gate` on the forward-controller path.
+Brought up via `so101_safety`'s `safety_stop_servo.launch.py` (monitor +
+bridge together). This is the clean, Servo-native replacement for
+`trajectory_safety_gate` on the forward-controller path.
 
 ### 5.4 Running the demo
 
-- **Sim (arm simulated, real USB camera):** `full_demo.launch.py` starts the
-  Gazebo sim + teleop + `depth_safety_stop.launch.py`. For the **Servo** variant,
-  run the §3 sim stack plus `depth_safety_stop.launch.py` and the
-  `safety_pause_bridge` instead of the JTC gate.
-- **Headless container (no camera):** replace `v4l2_camera_node` with
-  `test_image_publisher` (publishes `/follower/image_raw` / configurable) so the
-  pipeline still runs.
+- **Sim (arm simulated, real USB camera):** `full_demo_sim.launch.py` starts
+  the Gazebo sim + teleop + `so101_safety`'s `safety_stop_jtc.launch.py`
+  (assumes the depth topic is already published externally; pass
+  `launch_depth:=true` to bring up the camera + `depth_anything_node` inline
+  instead). For the **Servo** variant, run the §3 sim stack plus
+  `safety_stop_servo.launch.py` instead of the JTC gate.
+- **Headless container (no camera):** replace `usb_cam` with
+  `test_image_publisher` (publishes `/follower/image_raw` / configurable) so
+  the pipeline still runs.
 - **Real hardware:** identical perception; motion via the §4 real stack. Put a
   hand in front of the camera → ROI turns red → `/safety/protective_stop=true`
   → Servo pauses → arm freezes; remove hand → resume.
@@ -304,13 +323,15 @@ flowchart TB
     subgraph MOT["so101-motion (snap)"]
         SV["moveit_servo servo_node<br/>leader_servo_jog adapter<br/>(optional move_group)"]
     end
-    subgraph PER["so101-perception (snap, app)"]
-        DP["depth_proximity_node<br/>ONNX Runtime (CPU/GPU EP)"]
+    subgraph PER["so101-perception (depthanything snap, EXISTS TODAY)"]
+        DA["depth_anything_node<br/>ONNX Runtime (CPU/GPU EP)"]
     end
-    subgraph MODEL["so101-model (snap, content)"]
+    subgraph MODEL["depthanything-model (snap, content, EXISTS TODAY)"]
         W["ONNX weights @ /models"]
     end
-    subgraph SAFE["so101-safety (snap)"]
+    subgraph SAFE["so101-safety (package exists today; snap not yet built)"]
+        MON["depth_safety_monitor<br/>(pure topic consumer, no ML/vision deps)"]
+        GATE["trajectory_safety_gate"]
         SB["safety_pause_bridge"]
     end
     subgraph UI["so101-teleop-ui (snap)"]
@@ -320,19 +341,28 @@ flowchart TB
     MODEL -. content interface: $SNAP/models .-> PER
     UI -->|leader input| MOT
     HW <-->|"joint_states / commands (DDS)"| MOT
-    PER -->|"/safety/protective_stop"| SAFE
-    SAFE -->|"pause_servo"| MOT
-    CAM["camera-snap / v4l2 (camera interface)"] --> PER
+    PER -->|"/perception/depth (sensor_msgs/Image, 32FC1)"| SAFE
+    MON -->|"/safety/protective_stop"| GATE
+    MON -->|"/safety/protective_stop"| SB
+    SB -->|"pause_servo"| MOT
+    GATE -->|"JointTrajectory (JTC path)"| HW
+    CAM["camera-snap / usb-cam (camera interface)"] --> PER
 ```
 
-| Snap | Contents | Key snap interfaces |
-|---|---|---|
-| `so101-hardware` | bringup, `ros2_control`, Feetech driver, controllers, URDF | `raw-usb`, `serial-port`, `network`, `network-bind` |
-| `so101-motion` | Servo, `leader_servo_jog`, MoveIt config | `network`, `network-bind` |
-| `so101-perception` | camera pipeline, `depth_proximity_node`, inference runtime | `camera`, `network`, `network-bind`, **content plug** for model |
-| `so101-model` (content) | ONNX weights only, exposed via `content` slot | `content` slot |
-| `so101-safety` | `safety_pause_bridge` (Bool → `pause_servo`) | `network`, `network-bind` |
-| `so101-teleop-ui` | keyboard / joystick input | `joystick`, `network`, `network-bind` |
+| Snap | Contents | Key snap interfaces | Status |
+|---|---|---|---|
+| `so101-hardware` | bringup, `ros2_control`, Feetech driver, controllers, URDF | `raw-usb`, `serial-port`, `network`, `network-bind` | not yet snapped |
+| `so101-motion` | Servo, `leader_servo_jog`, MoveIt config | `network`, `network-bind` | not yet snapped |
+| `depthanything` (= `so101-perception`) | camera-fed ONNX inference (`depth_anything_node`), publishes both `/camera/depth/visualization` (viz) and `/perception/depth` (machine contract) | `network`, `network-bind`, **content plug** for model | **exists** — `so101_depth_demo/snap/snapcraft.yaml` |
+| `depthanything-model` (= `so101-model`) | ONNX weights only, exposed via `content` slot | `content` slot | **exists** — `snaps/depthanything-model/snapcraft.yaml` |
+| `so101-safety` | `depth_safety_monitor` (trigger) + `trajectory_safety_gate` + `safety_pause_bridge` (enforcement) — all consumers of the perception contract below, no ML/vision deps | `network`, `network-bind` | package exists (`so101_safety`), snap not yet built — should be simpler than `depthanything`'s (no pip/BLAS-LAPACK step) |
+| `so101-teleop-ui` | keyboard / joystick input | `joystick`, `network`, `network-bind` | not yet snapped |
+
+Note the `so101-safety` grouping deliberately diverges from an earlier sketch
+of this diagram that split perception-trigger and enforcement into separate
+snaps: keeping the trigger + enforcement + future diagnostics together in one
+package/snap is simpler to reason about and matches how the code is actually
+organised today (see `so101_safety/`).
 
 Benefits: independent release cadence, least-privilege confinement (only the
 hardware snap touches serial/USB, only perception touches the camera),
@@ -362,13 +392,20 @@ The model is replaceable at **three levels**, from cheapest to most flexible:
    downstream consumers depend only on the **topic contract**, not on the model,
    any node that honours it is a drop-in replacement:
 
-   > **Perception contract (stable API):**
+   > **Perception contract (stable API, implemented today):**
    > - **in:** `sensor_msgs/Image` on `<input_image_topic>`
-   > - **out:** `std_msgs/Bool` on `/safety/protective_stop`
-   > - **out (optional):** `sensor_msgs/Image` debug overlay
-   > - (future) structured output on a versioned topic, e.g.
-   >   `/perception/obstacles` (`vision_msgs/Detection2DArray`) or
-   >   `/perception/depth` (`sensor_msgs/Image`), for richer avoidance.
+   > - **out:** `sensor_msgs/Image` (32FC1) on `/perception/depth` — normalised
+   >   `[0,1]` depth, higher = closer
+   > - **out (optional):** `sensor_msgs/Image` (rgb8) colorised visualisation
+   >
+   > Downstream, `so101_safety`'s `depth_safety_monitor` turns `/perception/depth`
+   > into `std_msgs/Bool` on `/safety/protective_stop` — it never touches the
+   > model or the camera, so any perception node honouring the contract above
+   > is a drop-in replacement without touching `so101_safety` at all.
+   >
+   > (future) additional structured output on a versioned topic, e.g.
+   > `/perception/obstacles` (`vision_msgs/Detection2DArray`), for richer
+   > avoidance beyond a single Bool.
 
    This lets you replace Depth Anything with a stereo-depth node, a 2D object
    detector, a segmentation model, or a learned VLA policy — the motion and

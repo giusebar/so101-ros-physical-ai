@@ -1,11 +1,10 @@
 """Full SO-101 depth safety-stop demo on REAL hardware, via MoveIt Servo.
 
-Real-hardware counterpart to ``full_demo.launch.py`` (Gazebo), and the
-MoveIt-Servo counterpart to the previous, direct-copy version of this launch
-file. Routes the leader -> follower mirror through MoveIt Servo instead of a
-plain JointTrajectory relay, matching the architecture used by
-``so101_bringup sim_servo_teleop.launch.py`` in simulation. Brings up, in
-order:
+Real-hardware counterpart to ``full_demo_sim.launch.py`` (Gazebo), and the
+MoveIt-Servo counterpart to ``full_demo_real_split.launch.py``. Routes the
+leader -> follower mirror through MoveIt Servo instead of a plain
+JointTrajectory relay, matching the architecture used by ``so101_bringup``
+``sim_servo_teleop.launch.py`` in simulation. Brings up, in order:
 
   1. Real leader + follower arms (``so101_bringup`` ``leader.launch.py`` /
      ``follower_split.launch.py``, ``hardware_type:=real``). The follower runs
@@ -17,11 +16,17 @@ order:
      (``so101_teleop``) that reads ``/leader/joint_states`` +
      ``/follower/joint_states`` and drives Servo with JointJog commands
      (gripper forwarded directly, since it is outside the Servo move group).
-  3. The real overhead camera (usb_cam), the CPU Depth Anything proximity node
-     (-> ``/safety/protective_stop`` + debug overlay), and the
-     ``safety_pause_bridge`` that pauses/resumes Servo on a protective stop
-     (Servo's own collision/joint-limit checking supersedes the
-     ``trajectory_safety_gate`` used on the JointTrajectory path).
+  3. ``so101_safety``'s ``safety_stop_servo.launch.py``: a
+     ``depth_safety_monitor`` that consumes the depth topic and raises
+     ``/safety/protective_stop``, plus ``safety_pause_bridge`` that
+     pauses/resumes Servo on it (Servo's own collision/joint-limit checking
+     supersedes the ``trajectory_safety_gate`` used on the JointTrajectory
+     path).
+  4. The camera + depth model (``depth_anything_node``) publishing the depth
+     topic that (3) consumes. By default this is assumed to be running
+     EXTERNALLY (e.g. the ``depthanything`` + ``usb-cam`` snaps, per
+     ``docs/depthanything_usbcam_setup.md``) -- set ``launch_depth:=true`` to
+     bring it up inline instead (useful for sim/dev without the snaps).
 
 Move the REAL leader arm by hand to drive the follower. Put your palm in front
 of the camera to raise /safety/protective_stop; Servo then halts (and later
@@ -33,24 +38,24 @@ resumes) the follower until the obstacle clears.
   #  ~1 Hz. It is NOT a functional-safety system: expect up to ~1 s of       #
   #  reaction latency, and it only pauses MoveIt Servo. Keep a physical      #
   #  e-stop / power cut as the real safety mechanism. Test with the arm      #
-  #  clear of people first.                                                  #
+  #  clear of people first.                                                 #
   ###########################################################################
 
-Run:
-  ros2 launch so101_depth_demo full_demo_real.launch.py \
-    camera_device:=/dev/cam_overhead
+Run (depthanything/usb-cam snaps already running, the default):
+  ros2 launch so101_depth_demo full_demo_real_servo.launch.py
 
-  # If you have not set up the udev symlink, point at the raw node instead:
-  ros2 launch so101_depth_demo full_demo_real.launch.py \
-    camera_device:=/dev/video0
+Run (bring up camera + depth model inline instead of via snaps):
+  ros2 launch so101_depth_demo full_demo_real_servo.launch.py \
+    launch_depth:=true camera_device:=/dev/cam_overhead
 
 Prerequisites:
   - LeRobot motor setup + calibration done on both arms (EEPROM written).
   - udev symlinks /dev/so101_leader, /dev/so101_follower (or override the
     *_usb_port args), and the user in the `dialout` group.
-  - ONNX model at ~/models/depth_anything_v2_small.onnx
+  - If launch_depth:=true: ONNX model at ~/models/depth_anything_v2_small.onnx
     (so101_depth_demo/scripts/download_model.sh) and onnxruntime installed in
-    the interpreter ros2 uses.
+    the interpreter ros2 uses. Otherwise, the depthanything snap already
+    bundles this.
 """
 
 import os
@@ -77,10 +82,11 @@ def generate_launch_description():
     safety_stop_topic = LaunchConfiguration("safety_stop_topic")
     debug_image_topic = LaunchConfiguration("debug_image_topic")
     image_topic = LaunchConfiguration("image_topic")
-    inference_hz = LaunchConfiguration("inference_hz")
+    depth_image_topic = LaunchConfiguration("depth_image_topic")
     near_margin = LaunchConfiguration("near_margin")
     min_area_ratio = LaunchConfiguration("min_area_ratio")
     use_viewer = LaunchConfiguration("use_viewer")
+    launch_depth = LaunchConfiguration("launch_depth")
     # NOTE: deliberately NOT named "use_rviz" - leader.launch.py and
     # follower_split.launch.py both declare a launch argument with that exact
     # name (each hardcoded to "false" below so they don't pop their own RViz
@@ -166,13 +172,32 @@ def generate_launch_description():
             "use_sim_time": "false",
             # Real leader arm drives the mirror; no sim keyboard.
             "launch_keyboard": "false",
-            "launch_safety": "true",
-            "safety_stop_topic": safety_stop_topic,
             "kp": kp,
         }.items(),
     )
 
-    # --- 3a. Real overhead camera (usb_cam) ---------------------------------
+    # --- 3. Depth safety monitor + Servo pause bridge (so101_safety) --------
+    safety_stop = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution(
+                [FindPackageShare("so101_safety"), "launch", "safety_stop_servo.launch.py"]
+            )
+        ),
+        launch_arguments={
+            "depth_image_topic": depth_image_topic,
+            "safety_stop_topic": safety_stop_topic,
+            "debug_image_topic": debug_image_topic,
+            "near_margin": near_margin,
+            "min_area_ratio": min_area_ratio,
+            "publish_debug_image": use_viewer,
+            "pause_service": "/follower/servo_node/pause_servo",
+            "use_sim_time": "false",
+        }.items(),
+    )
+
+    # --- 4. Camera + depth model (optional, external by default) ------------
+    # Assumed to already be running externally (depthanything + usb-cam snaps)
+    # unless launch_depth:=true.
     camera = Node(
         package="usb_cam",
         executable="usb_cam_node_exe",
@@ -190,29 +215,24 @@ def generate_launch_description():
                 "use_sim_time": False,
             },
         ],
+        condition=IfCondition(launch_depth),
     )
 
-    # --- 3b. Depth proximity -> protective stop -----------------------------
-    depth_stop = Node(
-        package="so101_depth_demo",
-        executable="depth_proximity_node",
-        name="depth_proximity_node",
-        output="screen",
-        parameters=[
-            {
-                "model_path": model_path,
-                "input_image_topic": image_topic,
-                "stop_topic": safety_stop_topic,
-                "debug_image_topic": debug_image_topic,
-                "near_margin": near_margin,
-                "min_area_ratio": min_area_ratio,
-                "inference_hz": inference_hz,
-                "publish_debug_image": True,
-            }
-        ],
+    depth_model = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution(
+                [FindPackageShare("so101_depth_demo"), "launch", "depth_demo.launch.py"]
+            )
+        ),
+        launch_arguments={
+            "model_path": model_path,
+            "input_image_topic": image_topic,
+            "output_depth_topic": depth_image_topic,
+        }.items(),
+        condition=IfCondition(launch_depth),
     )
 
-    # --- 3c. Debug viewer -----------------------------------------------
+    # --- Debug viewer -----------------------------------------------
     # Use C++ image_view instead of rqt_image_view to avoid PyQt5 import
     # issues in the workshop container.
     viewer = Node(
@@ -224,7 +244,7 @@ def generate_launch_description():
         condition=IfCondition(use_viewer),
     )
 
-    # --- 4. Layout TF + RViz ------------------------------------------------
+    # --- 5. Layout TF + RViz ------------------------------------------------
     layout_tf = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(bringup_share, "launch", "layout_tf.launch.py")
@@ -261,16 +281,25 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "camera_device",
                 default_value="/dev/cam_overhead",
-                description="V4L2 device for the overhead (Logitech) camera.",
+                description="V4L2 device for the overhead (Logitech) camera "
+                "(only used if launch_depth:=true).",
             ),
             DeclareLaunchArgument(
                 "model_path",
                 default_value=os.path.expanduser(
                     "~/models/depth_anything_v2_small.onnx"
                 ),
+                description="Only used if launch_depth:=true.",
             ),
             DeclareLaunchArgument(
                 "image_topic", default_value="/static_camera/image_raw"
+            ),
+            DeclareLaunchArgument(
+                "depth_image_topic",
+                default_value="/perception/depth",
+                description="Raw normalised depth (32FC1) topic published by "
+                "depth_anything_node (snap or inline) and consumed by "
+                "so101_safety's depth_safety_monitor.",
             ),
             DeclareLaunchArgument(
                 "safety_stop_topic", default_value="/safety/protective_stop"
@@ -278,11 +307,17 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "debug_image_topic", default_value="/safety/depth_debug_image"
             ),
-            DeclareLaunchArgument("inference_hz", default_value="1.0"),
             DeclareLaunchArgument("near_margin", default_value="0.15"),
             DeclareLaunchArgument("min_area_ratio", default_value="0.12"),
             DeclareLaunchArgument("use_viewer", default_value="false"),
             DeclareLaunchArgument("use_teleop_rviz", default_value="true"),
+            DeclareLaunchArgument(
+                "launch_depth",
+                default_value="false",
+                description="Bring up the camera + depth_anything_node inline "
+                "instead of assuming the depthanything/usb-cam snaps are "
+                "already running externally.",
+            ),
             DeclareLaunchArgument(
                 "kp",
                 default_value="10.0",
@@ -305,7 +340,8 @@ def generate_launch_description():
             follower,
             layout_tf,
             camera,
-            depth_stop,
+            depth_model,
+            safety_stop,
             viewer,
             rviz_node,
             TimerAction(period=servo_start_delay, actions=[servo]),

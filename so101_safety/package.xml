@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>so101_safety</name>
+  <version>0.1.0</version>
+  <description>
+    SO-101 safety subsystem: perception-driven protective-stop trigger
+    (depth_safety_monitor) and its enforcement nodes (trajectory_safety_gate
+    for the JointTrajectory/JTC path, safety_pause_bridge for the MoveIt Servo
+    path). Decoupled from so101_depth_demo -- depth_safety_monitor consumes an
+    already-published depth topic (sensor_msgs/Image, 32FC1) rather than
+    running its own model inference, so this package has no ML/vision
+    dependencies. Intended as the home for future safety behaviours
+    (diagnostics, watchdogs, ...).
+  </description>
+  <maintainer email="giuseppe.barbieri@canonical.com">Giuseppe Barbieri</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>trajectory_msgs</depend>
+  <depend>std_srvs</depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

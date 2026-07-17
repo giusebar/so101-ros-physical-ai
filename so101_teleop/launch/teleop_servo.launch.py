@@ -7,8 +7,11 @@ through MoveIt Servo instead of the direct-copy ``teleop_split`` bridge. Starts:
      and publishes control_msgs/JointJog to the Servo node (JOINT_JOG mode),
      which streams position setpoints to the follower arm_forward_controller.
   2. ``leader_sim_keyboard`` (optional) - drives the simulated leader arm.
-  3. ``safety_pause_bridge`` (optional) - bridges /safety/protective_stop to the
-     Servo pause_servo service so a perception protective-stop halts teleop.
+
+Protective-stop handling (``safety_pause_bridge``) is NOT started here anymore
+-- it moved to the ``so101_safety`` package. Include
+``so101_safety/launch/safety_stop_servo.launch.py`` alongside this launch file
+to bridge ``/safety/protective_stop`` to Servo's ``pause_servo`` service.
 
 Prerequisites (start these first, in separate terminals):
   * a follower running ``arm_forward_controller`` (real or sim),
@@ -48,9 +51,6 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
     launch_keyboard = LaunchConfiguration("launch_keyboard")
     keyboard_prefix = LaunchConfiguration("keyboard_prefix")
-    launch_safety = LaunchConfiguration("launch_safety")
-    safety_stop_topic = LaunchConfiguration("safety_stop_topic")
-    pause_service = LaunchConfiguration("pause_service")
 
     adapter = Node(
         package="so101_teleop",
@@ -85,21 +85,6 @@ def generate_launch_description():
         condition=IfCondition(launch_keyboard),
     )
 
-    safety = Node(
-        package="so101_teleop",
-        executable="safety_pause_bridge",
-        name="safety_pause_bridge",
-        output="screen",
-        parameters=[
-            {
-                "safety_stop_topic": safety_stop_topic,
-                "pause_service": pause_service,
-                "use_sim_time": use_sim_time,
-            },
-        ],
-        condition=IfCondition(launch_safety),
-    )
-
     return LaunchDescription(
         [
             DeclareLaunchArgument("leader_topic", default_value="/leader/joint_states"),
@@ -122,19 +107,8 @@ def generate_launch_description():
             DeclareLaunchArgument("use_sim_time", default_value="true"),
             DeclareLaunchArgument("launch_keyboard", default_value="true"),
             DeclareLaunchArgument("keyboard_prefix", default_value="xterm -e"),
-            DeclareLaunchArgument(
-                "launch_safety",
-                default_value="true",
-                description="Start safety_pause_bridge to halt Servo on /safety/protective_stop.",
-            ),
-            DeclareLaunchArgument(
-                "safety_stop_topic", default_value="/safety/protective_stop"
-            ),
-            DeclareLaunchArgument(
-                "pause_service", default_value="/follower/servo_node/pause_servo"
-            ),
             adapter,
             keyboard,
-            safety,
         ]
     )
+

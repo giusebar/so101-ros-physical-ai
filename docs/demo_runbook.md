@@ -98,7 +98,7 @@ ls -lh ~/models/depth_anything_v2_small.onnx   # ~95 MB
 ```bash
 cd /home/workshop/workspace
 source /opt/ros/jazzy/setup.bash
-colcon build --packages-select feetech_ros2_driver so101_teleop so101_bringup so101_depth_demo
+colcon build --packages-select feetech_ros2_driver so101_teleop so101_safety so101_bringup so101_depth_demo
 source install/setup.bash
 ```
 
@@ -175,8 +175,8 @@ both drive the follower and open the same serial port):
 
 | Launch | Leader→follower path | Protective stop mechanism | Follower controller |
 | --- | --- | --- | --- |
-| `full_demo_real.launch.py` | **MoveIt Servo** (`leader_servo_jog` → JointJog) | `safety_pause_bridge` pauses Servo | `arm_forward_controller` (split) |
-| `full_demo_real_split.launch.py` | **Direct `teleop_split`** (absolute-position mirror) | `trajectory_safety_gate` freezes the arm | `arm_trajectory_controller` (split) |
+| `full_demo_real_servo.launch.py` | **MoveIt Servo** (`leader_servo_jog` → JointJog) | `so101_safety`'s `safety_pause_bridge` pauses Servo | `arm_forward_controller` (split) |
+| `full_demo_real_split.launch.py` | **Direct `teleop_split`** (absolute-position mirror) | `so101_safety`'s `trajectory_safety_gate` freezes the arm | `arm_trajectory_controller` (split) |
 
 The `_split` variant is the direct-copy teleop (no Servo) — snappier following,
 no per-joint gain/lead tuning, but no Servo joint-limit/collision safety.
@@ -192,16 +192,18 @@ source /opt/ros/jazzy/setup.bash
 source /home/workshop/workspace/install/setup.bash
 
 # --- MoveIt Servo version ---
-ros2 launch so101_depth_demo full_demo_real.launch.py \
+# By default this assumes the depthanything + usb-cam snaps are already
+# running externally (see docs/depthanything_usbcam_setup.md). Add
+# launch_depth:=true camera_device:=/dev/video4 to bring up the camera +
+# depth_anything_node inline instead.
+ros2 launch so101_depth_demo full_demo_real_servo.launch.py \
   leader_usb_port:=/dev/ttyACM1 \
-  follower_usb_port:=/dev/ttyACM0 \
-  camera_device:=/dev/video4
+  follower_usb_port:=/dev/ttyACM0
 
 # --- OR: direct teleop_split version (safety gate, no Servo) ---
 ros2 launch so101_depth_demo full_demo_real_split.launch.py \
   leader_usb_port:=/dev/ttyACM1 \
-  follower_usb_port:=/dev/ttyACM0 \
-  camera_device:=/dev/video4
+  follower_usb_port:=/dev/ttyACM0
 
 # Terminal 2 — depth debug overlay (green = clear, red = STOP)
 source /opt/ros/jazzy/setup.bash
@@ -246,16 +248,25 @@ ros2 run usb_cam usb_cam_node_exe --ros-args \
   --params-file $(ros2 pkg prefix so101_bringup)/share/so101_bringup/config/cameras/so101_usb_cam.yaml \
   -p video_device:=/dev/video4 -p camera_name:=cam_overhead -p frame_id:=cam_overhead
 
-# T5 — depth proximity -> /safety/protective_stop
-ros2 run so101_depth_demo depth_proximity_node --ros-args \
+# T5 — depth model (perception only; publishes /perception/depth + colorised viz)
+# Assumed to already be running externally as the depthanything snap in the
+# one-launch version above; shown here inline for the manual decomposition.
+ros2 run so101_depth_demo depth_anything_node --ros-args \
   -p model_path:=$HOME/models/depth_anything_v2_small.onnx \
   -p input_image_topic:=/static_camera/image_raw \
+  -p output_depth_topic:=/perception/depth \
+  -p output_image_topic:=/camera/depth/visualization
+
+# T5b — depth safety monitor -> /safety/protective_stop (pure topic consumer,
+# no ONNX/OpenCV dependency; consumes the /perception/depth published above)
+ros2 run so101_safety depth_safety_monitor --ros-args \
+  -p depth_image_topic:=/perception/depth \
   -p stop_topic:=/safety/protective_stop \
   -p debug_image_topic:=/safety/depth_debug_image \
-  -p publish_debug_image:=true -p inference_hz:=1.0
+  -p publish_debug_image:=true -p monitor_hz:=10.0
 
 # T6 — safety gate (intercepts teleop, freezes follower on stop)
-ros2 run so101_teleop trajectory_safety_gate --ros-args \
+ros2 run so101_safety trajectory_safety_gate --ros-args \
   -p input_topic:=/safety/follower/arm_trajectory_in \
   -p output_topic:=/follower/trajectory_controller/joint_trajectory \
   -p safety_stop_topic:=/safety/protective_stop \
@@ -313,11 +324,12 @@ ros2 launch so101_depth_demo depth_demo.launch.py \
   input_image_topic:=/follower/image_raw
 ```
 
-> **[PROD TODO]** `depth_safety_stop.launch.py` (used by the *sim* `full_demo.launch.py`)
-> was changed to target **real** hardware (`use_sim_time:=false`,
-> `trajectory_controller`). To restore the fully-wired sim safety demo,
-> parametrize `use_sim_time` and the controller name in that launch instead of
-> hardcoding them.
+> **[PROD TODO]** the safety launch wiring (now `so101_safety`'s
+> `safety_stop_jtc.launch.py`, included from `full_demo_sim.launch.py`) still
+> hardcodes `use_sim_time:=false` / the real trajectory controller name in
+> places inherited from the real-hardware path. To restore a fully-wired sim
+> safety demo, parametrize `use_sim_time` and the controller name through to
+> that launch instead of hardcoding them.
 
 ---
 
@@ -373,7 +385,7 @@ actions:
 | Symptom | Cause / fix |
 | --- | --- |
 | `Bad file descriptor` opening `/dev/ttyACM*` | A **stale `ros2_control_node`** from a previous run still holds the port. Kill leftovers (below). Also check the leader/follower port args are correct. |
-| `The 'type' param was not defined for '<controller>'` | Follower loaded the wrong controller YAML (leader's leaked in). Ensure both `leader`/`follower` includes pass their own `controller_config_file` explicitly. Fixed in `full_demo_real.launch.py`. |
+| `The 'type' param was not defined for '<controller>'` | Follower loaded the wrong controller YAML (leader's leaked in). Ensure both `leader`/`follower` includes pass their own `controller_config_file` explicitly. Fixed in `full_demo_real_servo.launch.py`. |
 | Follower follows in RViz but doesn't physically move | Servo power / wrong controller. Confirm `trajectory_controller`/`forward_controller` active and follower servos powered. |
 | Safety gate never stops the arm | Gate binary out of date / topic mismatch. Rebuild `so101_teleop`; gate must subscribe to `/safety/protective_stop`. Check `ros2 topic echo /safety/protective_stop`. |
 | `ModuleNotFoundError: No module named 'PyQt5' / 'PySide2'` | Qt-context conflict when multiple GUI nodes start from one launch. Run `rviz2` and `image_view` in their own terminals (defaults `use_rviz:=false`, `use_viewer:=false`). |
@@ -405,7 +417,7 @@ sleep 2
 - [ ] Add user to `dialout`; don't rely on world-writable tty nodes.
 - [ ] Pin `onnxruntime` version; decide venv vs `--break-system-packages` and bake into the image.
 - [ ] Provision §2 steps via workshop.yaml actions (verified schema).
-- [ ] Parametrize `depth_safety_stop.launch.py` (`use_sim_time`, controller name) so sim + real both work.
+- [ ] Parametrize `so101_safety`'s `safety_stop_jtc.launch.py` (`use_sim_time`, controller name) so sim + real both work.
 - [ ] Commit the `so101_teleop/CMakeLists.txt` gate target and launch fixes upstream.
 - [ ] Camera intrinsics: provide `cam_overhead.yaml` (currently logs "Unable to open camera calibration file").
 - [ ] Consider higher `inference_hz` / GPU for a more responsive safety stop.

@@ -27,6 +27,12 @@ def generate_launch_description():
             default_value="/camera/depth/visualization",
             description="Colorised depth visualisation topic to publish.",
         ),
+        DeclareLaunchArgument(
+            "output_depth_topic",
+            default_value="/perception/depth",
+            description="Raw normalised depth (32FC1) topic for downstream "
+            "consumers, e.g. so101_safety's depth_safety_monitor.",
+        ),
         # Multiple of 14 (ViT patch size); 308 runs ~2.8x faster than native 518.
         DeclareLaunchArgument("model_input_size", default_value="308"),
         DeclareLaunchArgument("publish_width", default_value="256"),
@@ -54,6 +60,7 @@ def generate_launch_description():
                 "model_path": LaunchConfiguration("model_path"),
                 "input_image_topic": LaunchConfiguration("input_image_topic"),
                 "output_image_topic": LaunchConfiguration("output_image_topic"),
+                "output_depth_topic": LaunchConfiguration("output_depth_topic"),
                 "model_input_size": LaunchConfiguration("model_input_size"),
                 "publish_width": LaunchConfiguration("publish_width"),
                 "publish_height": LaunchConfiguration("publish_height"),

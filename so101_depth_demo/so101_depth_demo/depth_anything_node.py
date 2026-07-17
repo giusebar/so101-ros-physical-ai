@@ -2,7 +2,9 @@
 Depth Anything V2 (Small) inference node — CPU / ONNX Runtime
 =============================================================
 Subscribes to a ROS image topic, runs monocular relative-depth inference with
-ONNX Runtime, and republishes a colorised depth visualisation.
+ONNX Runtime, and republishes both a colorised depth visualisation (for
+humans) and a raw normalised depth map (for downstream consumers, e.g.
+``so101_safety``'s ``depth_safety_monitor``).
 
 This is the non-NVIDIA counterpart to the snap-twin TensorRT demo. It does NOT
 import ``tensorrt`` or ``pycuda`` and does NOT open a camera device directly —
@@ -13,12 +15,16 @@ Subscribes:
   <input_image_topic>   sensor_msgs/Image   (rgb8 | bgr8 | mono8)
 
 Publishes:
-  <output_image_topic>  sensor_msgs/Image   encoding=rgb8  (INFERNO colormap)
+  <output_image_topic>  sensor_msgs/Image   encoding=rgb8   (INFERNO colormap, for viewing)
+  <output_depth_topic>  sensor_msgs/Image   encoding=32FC1  (normalised [0,1] depth,
+                                                             higher = closer; for
+                                                             machine consumers)
 
 Parameters:
   model_path          (string) path to the Depth Anything V2 Small .onnx file
   input_image_topic   (string) camera image topic to subscribe to
   output_image_topic  (string) colorised depth visualisation topic to publish
+  output_depth_topic  (string) raw normalised depth topic to publish (32FC1)
   model_input_size    (int)    square model input size, multiple of 14 (default 308)
   publish_width       (int)    output width  (default 518)
   publish_height      (int)    output height (default 518)
@@ -52,6 +58,7 @@ class DepthAnythingNode(Node):
         self.declare_parameter("model_path", default_model)
         self.declare_parameter("input_image_topic", "/follower/image_raw")
         self.declare_parameter("output_image_topic", "/camera/depth/visualization")
+        self.declare_parameter("output_depth_topic", "/perception/depth")
         # Must be a multiple of 14 (ViT patch size). 518=14x37 is the model's
         # native size; 308=14x22 runs ~2.8x faster on CPU with minor accuracy
         # loss (fine for relative-depth visualisation / proximity safety).
@@ -64,6 +71,7 @@ class DepthAnythingNode(Node):
         model_path = self.get_parameter("model_path").value
         in_topic = self.get_parameter("input_image_topic").value
         out_topic = self.get_parameter("output_image_topic").value
+        depth_out_topic = self.get_parameter("output_depth_topic").value
         self._in_size = int(self.get_parameter("model_input_size").value)
         self._pub_w = int(self.get_parameter("publish_width").value)
         self._pub_h = int(self.get_parameter("publish_height").value)
@@ -90,13 +98,15 @@ class DepthAnythingNode(Node):
 
         # ── Pub / Sub ───────────────────────────────────────────────────────
         self._pub = self.create_publisher(Image, out_topic, 5)
+        self._depth_pub = self.create_publisher(Image, depth_out_topic, 5)
         self._sub = self.create_subscription(Image, in_topic, self._image_cb, 5)
 
         self._frame_count = 0
         self._last_infer_t = 0.0
         self.get_logger().info(
             f"DepthAnythingNode ready — subscribing '{in_topic}', "
-            f"publishing '{out_topic}' ({self._pub_w}x{self._pub_h})"
+            f"publishing viz '{out_topic}' ({self._pub_w}x{self._pub_h}), "
+            f"publishing raw depth '{depth_out_topic}' (32FC1)"
         )
 
     # ────────────────────────────────────────────────────────────────────────
@@ -181,13 +191,30 @@ class DepthAnythingNode(Node):
         else:
             depth_out = depth_norm
 
+        stamp = msg.header.stamp if msg.header.stamp.sec else self.get_clock().now().to_msg()
+        frame_id = msg.header.frame_id or "camera"
+
+        # ── Raw depth (machine consumers, e.g. so101_safety) ────────────────
+        depth_f32 = np.ascontiguousarray(depth_out, dtype=np.float32)
+        depth_msg = Image()
+        depth_msg.header.stamp = stamp
+        depth_msg.header.frame_id = frame_id
+        depth_msg.height = self._pub_h
+        depth_msg.width = self._pub_w
+        depth_msg.encoding = "32FC1"
+        depth_msg.is_bigendian = False
+        depth_msg.step = self._pub_w * 4
+        depth_msg.data = array.array("B", depth_f32.tobytes())
+        self._depth_pub.publish(depth_msg)
+
+        # ── Colorised visualisation (humans, rqt_image_view, ...) ───────────
         depth_u8 = (depth_out * 255).astype(np.uint8)
         color_bgr = cv2.applyColorMap(depth_u8, cv2.COLORMAP_INFERNO)
         rgb_color = cv2.cvtColor(color_bgr, cv2.COLOR_BGR2RGB)
 
         vis = Image()
-        vis.header.stamp = msg.header.stamp if msg.header.stamp.sec else self.get_clock().now().to_msg()
-        vis.header.frame_id = msg.header.frame_id or "camera"
+        vis.header.stamp = stamp
+        vis.header.frame_id = frame_id
         vis.height = self._pub_h
         vis.width = self._pub_w
         vis.encoding = "rgb8"

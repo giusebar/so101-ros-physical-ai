@@ -28,7 +28,6 @@ setup(
         "console_scripts": [
             "depth_anything_node = so101_depth_demo.depth_anything_node:main",
             "depth_display_node = so101_depth_demo.depth_display_node:main",
-            "depth_proximity_node = so101_depth_demo.depth_proximity_node:main",
             "test_image_publisher = so101_depth_demo.test_image_publisher:main",
         ],
     },

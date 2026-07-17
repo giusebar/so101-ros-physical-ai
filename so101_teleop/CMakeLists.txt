@@ -17,15 +17,12 @@ find_package(sensor_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
 find_package(control_msgs REQUIRED)
 find_package(moveit_msgs REQUIRED)
-find_package(std_srvs REQUIRED)
 
 # Add executables 
 add_executable(teleop_split src/teleop_split.cpp)
 add_executable(teleop src/teleop.cpp)
 add_executable(leader_sim_keyboard src/leader_sim_keyboard.cpp)
 add_executable(leader_servo_jog src/leader_servo_jog.cpp)
-add_executable(safety_pause_bridge src/safety_pause_bridge.cpp)
-add_executable(trajectory_safety_gate src/trajectory_safety_gate.cpp)
 
 # Link dependencies
 ament_target_dependencies(teleop
@@ -52,16 +49,6 @@ ament_target_dependencies(leader_servo_jog
   sensor_msgs
   control_msgs
   moveit_msgs)
-ament_target_dependencies(safety_pause_bridge
-	rclcpp
-	std_msgs
-  std_srvs)
-
-ament_target_dependencies(trajectory_safety_gate
-	rclcpp
-	std_msgs
-  sensor_msgs
-  trajectory_msgs)
 
 # Install executables
 install(TARGETS 
@@ -69,8 +56,6 @@ install(TARGETS
 	teleop_split
   leader_sim_keyboard
   leader_servo_jog
-  safety_pause_bridge
-  trajectory_safety_gate
 	DESTINATION lib/${PROJECT_NAME})
 
 # Install share files, launch 

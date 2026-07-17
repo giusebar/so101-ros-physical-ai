@@ -49,14 +49,15 @@ before any follower restart. Prefer a physical e-stop nearby.
 | `so101_description` | URDF/xacro, meshes. `variant:=leader|follower`, `hardware_type:=mock|real|gazebo`. |
 | `so101_moveit_config` | MoveIt + **Servo** config: `so101_servo.yaml`, `kinematics.yaml` (`pick_ik`), `joint_limits.yaml`, SRDF, `servo.launch.py`. |
 | `so101_bringup` | Launch orchestration, ros2_control controller YAMLs, hardware joint configs, cameras, RViz. |
-| `so101_teleop` | Teleop C++ nodes: `teleop_split`, `teleop`, `leader_servo_jog`, `trajectory_safety_gate`, `safety_pause_bridge`, `leader_sim_keyboard`. |
-| `so101_depth_demo` | Depth-Anything proximity → `/safety/protective_stop`; the full real-hardware demo launches. |
+| `so101_teleop` | Teleop C++ nodes: `teleop_split`, `teleop`, `leader_servo_jog`, `leader_sim_keyboard`. (Safety nodes `trajectory_safety_gate`/`safety_pause_bridge` moved to `so101_safety`.) |
+| `so101_safety` | Safety subsystem (mixed `ament_cmake`+`ament_cmake_python`): `depth_safety_monitor` (Python, perception-driven `/safety/protective_stop` trigger — pure topic consumer, no ML/vision deps) + `trajectory_safety_gate`/`safety_pause_bridge` (C++ enforcement, moved from `so101_teleop`). Home for future safety behaviours (diagnostics, watchdogs, ...). |
+| `so101_depth_demo` | Depth-Anything inference only (`depth_anything_node`): publishes colorized viz (`/camera/depth/visualization`) AND raw normalised depth (`/perception/depth`, 32FC1) for `so101_safety` to consume. No safety logic lives here anymore. |
 | `feetech_ros2_driver` | Feetech STS ros2_control hardware interface (git submodule). |
 | `so101_camera_calibration` | Offline hand-eye calibration (the ONLY consumer of `so101_kinematics`). |
 | `so101_kinematics` / `_msgs` | **Legacy** custom IK (robokin/Placo/Viser). **Not used by any demo.** MoveIt/Servo get kinematics from `so101_moveit_config`. |
 | `episode_recorder`, `rosbag_to_lerobot`, `so101_inference`, `policy_server` | Physical-AI data/inference tooling. |
 | `snap-usb-cam` | Standalone strict-confinement snap packaging upstream `ros-drivers/usb_cam` (production alternative to the apt `usb_cam` dep). Configured via `snap set usb-cam device=... frame-id=... camera-name=... namespace=...`, not a params YAML. See `snap-usb-cam/snapcraft.yaml`. |
-| `depthanything` + `depthanything-model` | Strict-confinement snap pair for `depth_anything_node` (viz-only depth demo, not the safety-stop path). `depthanything` is an **always-on daemon** (like `usb-cam`) built from `so101_depth_demo/snap/snapcraft.yaml`, configured via `snap set depthanything input-image-topic=... output-image-topic=...`. `depthanything-model` is a content-only snap shipping the ONNX weights, mounted at `$SNAP/models`. See `docs/depthanything_usbcam_setup.md` for the full setup/verify walkthrough. |
+| `depthanything` + `depthanything-model` | Strict-confinement snap pair for `depth_anything_node` (inference only, no safety logic). `depthanything` is an **always-on daemon** (like `usb-cam`) built from `so101_depth_demo/snap/snapcraft.yaml`, configured via `snap set depthanything input-image-topic=... output-image-topic=... output-depth-topic=...`. `depthanything-model` is a content-only snap shipping the ONNX weights, mounted at `$SNAP/models`. See `docs/depthanything_usbcam_setup.md` for the full setup/verify walkthrough. |
 
 Joint order everywhere: `[shoulder_pan, shoulder_lift, elbow_flex, wrist_flex,
 wrist_roll]` (+ `gripper` handled separately). Namespaces: `/leader`, `/follower`.
@@ -64,19 +65,24 @@ wrist_roll]` (+ `gripper` handled separately). Namespaces: `/leader`, `/follower
 ## The two real-hardware demos (mutually exclusive)
 
 Both bring up leader + follower + overhead camera + depth protective-stop + RViz.
-Run one at a time (they share the follower and serial port).
+Run one at a time (they share the follower and serial port). By default both
+assume the camera + depth model are already running externally (the
+`depthanything` + `usb-cam` snaps, per `docs/depthanything_usbcam_setup.md`);
+pass `launch_depth:=true` to bring the camera + `depth_anything_node` up
+inline instead.
 
-- **Servo:** `ros2 launch so101_depth_demo full_demo_real.launch.py`
+- **Servo:** `ros2 launch so101_depth_demo full_demo_real_servo.launch.py`
   - `leader_servo_jog` (P-controller on joint error) → `/follower/servo_node/delta_joint_cmds` (JointJog) → `servo_node` → `arm_forward_controller`.
-  - `safety_pause_bridge`: `/safety/protective_stop` → Servo pause.
+  - `so101_safety`'s `safety_pause_bridge`: `/safety/protective_stop` → Servo pause.
   - Follower controllers: `follower_split_controllers.yaml`, `arm_controller:=arm_forward_controller`.
 - **Split (direct):** `ros2 launch so101_depth_demo full_demo_real_split.launch.py`
-  - `teleop_split` (absolute-position mirror, `arm_mode:=joint_trajectory`) → `trajectory_safety_gate` → `arm_trajectory_controller`.
+  - `teleop_split` (absolute-position mirror, `arm_mode:=joint_trajectory`) → `so101_safety`'s `trajectory_safety_gate` → `arm_trajectory_controller`.
   - Gate freezes the arm (trajectory hold) on protective stop.
 
-Typical args: `leader_usb_port:=/dev/ttyACM1 follower_usb_port:=/dev/ttyACM0
-camera_device:=/dev/video4`. RViz/image_view are usually run in their own
-terminals (Qt conflicts). See `docs/demo_runbook.md` for the full runbook.
+Typical args: `leader_usb_port:=/dev/ttyACM1 follower_usb_port:=/dev/ttyACM0`
+(add `launch_depth:=true camera_device:=/dev/video4` if not using the snaps).
+RViz/image_view are usually run in their own terminals (Qt conflicts). See
+`docs/demo_runbook.md` for the full runbook.
 
 ## Gotchas / decisions already made (don't relitigate without reason)
 
@@ -120,19 +126,20 @@ terminals (Qt conflicts). See `docs/demo_runbook.md` for the full runbook.
   `so101_servo.yaml`) on `/follower/arm_forward_controller/commands`. Servo is
   effectively the integrator/interpolator standing in for what the JTC would
   normally do.
-- **Two depth nodes in `so101_depth_demo`, easy to confuse:**
-  - `depth_anything_node.py`: viz-only. `/follower/image_raw` →
-    Depth-Anything-V2-Small ONNX → colorized `/camera/depth/visualization`.
-    No thresholding, no safety logic. **Not used by either real-hardware
-    demo** — only wired into the separate `depth_demo.launch.py`.
-  - `depth_proximity_node.py`: the actual safety-stop trigger used by both
-    real demos. `/static_camera/image_raw` → same ONNX model → crops a center
-    ROI, computes a **background reference** from the median depth *outside*
-    the ROI (model output is only relative/per-frame, no absolute scale),
-    flags "near" pixels vs. background+margin, debounces with hysteresis
-    (`frames_to_block`/`frames_to_clear`), publishes `Bool` on
-    `/safety/protective_stop`. Feeds `safety_pause_bridge` (Servo demo) or
-    `trajectory_safety_gate` (split demo).
+- **One depth node, two outputs (was two nodes with duplicate inference):**
+  `depth_anything_node.py` runs ONNX inference once and publishes both
+  `/camera/depth/visualization` (rgb8, colorized, for viewing/rqt) and
+  `/perception/depth` (32FC1, normalised `[0,1]`, higher = closer — the
+  machine-readable contract). `so101_safety`'s `depth_safety_monitor`
+  subscribes to `/perception/depth` and does NOT run its own model inference
+  — it's a pure topic consumer (no ONNX/OpenCV deps), so there is now only
+  ever one inference pass over the camera feed. It crops a center ROI,
+  computes a **background reference** from the median depth *outside* the ROI
+  (the model output is only relative/per-frame, no absolute scale), flags
+  "near" pixels vs. background+margin, debounces with hysteresis
+  (`frames_to_block`/`frames_to_clear`), and publishes `Bool` on
+  `/safety/protective_stop`. Feeds `safety_pause_bridge` (Servo demo) or
+  `trajectory_safety_gate` (split demo), both now in `so101_safety`.
 - **Strict-confinement snap + `opencv-python-headless` = missing BLAS/LAPACK
   at runtime.** `cv2` `dlopen()`s `libblas.so.3`/`liblapack.so.3`, which
   aren't on the default library search path inside a strict snap. The
