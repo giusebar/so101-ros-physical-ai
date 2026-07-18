@@ -41,13 +41,18 @@ Parameters:
   publish_debug_image (bool)   publish the overlay image
 """
 
-from collections import deque
-
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
+
+from so101_safety.safety_monitor_common import (
+    draw_roi_border,
+    HysteresisDebouncer,
+    parse_roi,
+    roi_pixel_bounds,
+)
 from std_msgs.msg import Bool
 
 
@@ -70,19 +75,18 @@ class DepthSafetyMonitor(Node):
 
         in_topic = self.get_parameter("depth_image_topic").value
         self._stop_topic = self.get_parameter("stop_topic").value
-        self._roi = self._parse_roi(self.get_parameter("roi").value)
+        self._roi = parse_roi(self.get_parameter("roi").value)
         self._near = float(self.get_parameter("near_threshold").value)
         self._margin = float(self.get_parameter("near_margin").value)
         self._min_area = float(self.get_parameter("min_area_ratio").value)
-        self._n_block = int(self.get_parameter("frames_to_block").value)
-        self._n_clear = int(self.get_parameter("frames_to_clear").value)
+        n_block = int(self.get_parameter("frames_to_block").value)
+        n_clear = int(self.get_parameter("frames_to_clear").value)
         hz = float(self.get_parameter("monitor_hz").value)
         self._publish_debug = bool(self.get_parameter("publish_debug_image").value)
 
         self._latest = None
-        self._stop_state = False
         self._last_bg = 0.0
-        self._hist = deque(maxlen=max(self._n_block, self._n_clear))
+        self._debouncer = HysteresisDebouncer(n_block, n_clear)
 
         self._stop_pub = self.create_publisher(Bool, self._stop_topic, 10)
         self._dbg_pub = None
@@ -125,9 +129,7 @@ class DepthSafetyMonitor(Node):
             return
 
         h, w = depth.shape
-        x1, y1, x2, y2 = self._roi
-        ix1, iy1 = int(x1 * w), int(y1 * h)
-        ix2, iy2 = int(x2 * w), int(y2 * h)
+        ix1, iy1, ix2, iy2 = roi_pixel_bounds(self._roi, w, h)
         roi = depth[iy1:iy2, ix1:ix2]
 
         # Background reference: median depth of the border region OUTSIDE the
@@ -141,20 +143,11 @@ class DepthSafetyMonitor(Node):
         near_level = max(background + self._margin, self._near)
         area_ratio = float(np.mean(roi > near_level)) if roi.size else 0.0
         self._last_bg = background
-        self._hist.append(area_ratio >= self._min_area)
-        self._update_state()
+        stop_state = self._debouncer.update(area_ratio >= self._min_area)
 
-        self._stop_pub.publish(Bool(data=self._stop_state))
+        self._stop_pub.publish(Bool(data=stop_state))
         if self._dbg_pub is not None:
             self._publish_debug_image(depth, area_ratio)
-
-    def _update_state(self):
-        block = list(self._hist)[-self._n_block:]
-        clear = list(self._hist)[-self._n_clear:]
-        if len(block) == self._n_block and all(block):
-            self._stop_state = True
-        elif len(clear) == self._n_clear and not any(clear):
-            self._stop_state = False
 
     def _publish_debug_image(self, depth: np.ndarray, area_ratio: float):
         # Plain-numpy mono8 overlay (no OpenCV dependency): grayscale depth
@@ -162,15 +155,8 @@ class DepthSafetyMonitor(Node):
         # lightweight, dependency-free node.
         u8 = (np.clip(depth, 0.0, 1.0) * 255).astype(np.uint8)
         h, w = u8.shape
-        x1, y1, x2, y2 = self._roi
-        ix1, iy1 = int(x1 * w), int(y1 * h)
-        ix2, iy2 = int(x2 * w), int(y2 * h)
-        marker = 255 if self._stop_state else 0
-        thickness = 2
-        u8[iy1:iy1 + thickness, ix1:ix2] = marker
-        u8[max(iy2 - thickness, 0):iy2, ix1:ix2] = marker
-        u8[iy1:iy2, ix1:ix1 + thickness] = marker
-        u8[iy1:iy2, max(ix2 - thickness, 0):ix2] = marker
+        marker = 255 if self._debouncer.state else 0
+        draw_roi_border(u8, self._roi, marker)
 
         msg = Image()
         msg.header = self._latest.header
@@ -183,17 +169,6 @@ class DepthSafetyMonitor(Node):
         self.get_logger().debug(
             f"debug overlay: area_ratio={area_ratio:.2f} bg={self._last_bg:.2f}"
         )
-
-    @staticmethod
-    def _parse_roi(value):
-        vals = (
-            [float(v) for v in value.split(",")]
-            if isinstance(value, str)
-            else [float(v) for v in value]
-        )
-        if len(vals) != 4 or not all(0.0 <= v <= 1.0 for v in vals):
-            raise ValueError("roi must be 4 normalised values x1,y1,x2,y2 in [0,1]")
-        return vals
 
 
 def main(args=None):

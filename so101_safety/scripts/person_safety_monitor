@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+"""Console entry point for the person_safety_monitor node (ament_cmake_python)."""
+
+from so101_safety.person_safety_monitor import main
+
+if __name__ == "__main__":
+    main()

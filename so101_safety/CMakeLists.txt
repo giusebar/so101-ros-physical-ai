@@ -45,6 +45,7 @@ ament_python_install_package(${PROJECT_NAME})
 
 install(PROGRAMS
   scripts/depth_safety_monitor
+  scripts/person_safety_monitor
   DESTINATION lib/${PROJECT_NAME}
 )
 

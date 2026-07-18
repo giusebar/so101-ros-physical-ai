@@ -4,14 +4,15 @@
   <name>so101_safety</name>
   <version>0.1.0</version>
   <description>
-    SO-101 safety subsystem: perception-driven protective-stop trigger
-    (depth_safety_monitor) and its enforcement nodes (trajectory_safety_gate
-    for the JointTrajectory/JTC path, safety_pause_bridge for the MoveIt Servo
-    path). Decoupled from so101_depth_demo -- depth_safety_monitor consumes an
-    already-published depth topic (sensor_msgs/Image, 32FC1) rather than
-    running its own model inference, so this package has no ML/vision
-    dependencies. Intended as the home for future safety behaviours
-    (diagnostics, watchdogs, ...).
+    SO-101 safety subsystem: perception-driven protective-stop triggers
+    (depth_safety_monitor for monocular-depth proximity, person_safety_monitor
+    for detection-based presence) and their shared enforcement nodes
+    (trajectory_safety_gate for the JointTrajectory/JTC path,
+    safety_pause_bridge for the MoveIt Servo path). Decoupled from
+    so101_depth_demo / so101_yolo_demo -- the monitor nodes consume an
+    already-published perception topic rather than running their own model
+    inference, so this package has no ONNX/OpenCV dependencies. Intended as
+    the home for future safety behaviours (diagnostics, watchdogs, ...).
   </description>
   <maintainer email="giuseppe.barbieri@canonical.com">Giuseppe Barbieri</maintainer>
   <license>Apache-2.0</license>
@@ -27,6 +28,7 @@
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>vision_msgs</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

@@ -1,0 +1,55 @@
+#!/bin/bash
+# snap/local/yolodetect-launch
+#
+# Entry point for the `yolodetect` daemon app. Reads the runtime.env and
+# params.yaml rendered by the configure hook (snap/hooks/configure) and execs
+# the yolo_detect_node ROS 2 node directly (no `ros2 launch` involved).
+#
+# This script runs inside the ros2-jazzy extension's command-chain, so the
+# ROS 2 underlay/overlay environment (AMENT_PREFIX_PATH, LD_LIBRARY_PATH,
+# PYTHONPATH, ...) is already sourced and the so101_yolo_demo package's
+# console-script entry points are on PATH.
+set -eu
+
+PARAMS_FILE="$SNAP_DATA/params.yaml"
+RUNTIME_ENV="$SNAP_DATA/runtime.env"
+YOLO_DETECT_NODE_EXE="$SNAP/opt/ros/snap/lib/so101_yolo_demo/yolo_detect_node"
+
+# opencv-python-headless (cv2) dlopen()s liblapack.so.3/libblas.so.3 at
+# runtime. The liblapack3/libblas3 debs install those under
+# usr/lib/<triplet>/lapack|blas/, which isn't on the default library search
+# path, so add it explicitly here (triplet varies by arch). Same fix as the
+# depthanything/usb-cam snaps' cv_bridge/cv2 dependency.
+case "${SNAP_ARCH:-}" in
+  amd64) triplet=x86_64-linux-gnu ;;
+  arm64) triplet=aarch64-linux-gnu ;;
+  *) triplet="" ;;
+esac
+if [ -n "$triplet" ]; then
+  export LD_LIBRARY_PATH="$SNAP/usr/lib/$triplet/lapack:$SNAP/usr/lib/$triplet/blas:${LD_LIBRARY_PATH:-}"
+fi
+
+if [ ! -f "$PARAMS_FILE" ]; then
+  echo "yolodetect: no configuration found yet at $PARAMS_FILE" >&2
+  echo "yolodetect: the configure hook should have created this on install" >&2
+  exit 1
+fi
+
+# NAMESPACE, NODE_NAME, ROS_DOMAIN_ID, RMW_IMPLEMENTATION (all optional)
+if [ -f "$RUNTIME_ENV" ]; then
+  # shellcheck disable=SC1090
+  . "$RUNTIME_ENV"
+fi
+
+set -- "$YOLO_DETECT_NODE_EXE" --ros-args --params-file "$PARAMS_FILE"
+
+if [ -n "${NODE_NAME:-}" ]; then
+  set -- "$@" -r __node:="$NODE_NAME"
+fi
+
+if [ -n "${NAMESPACE:-}" ]; then
+  set -- "$@" -r __ns:="$NAMESPACE"
+fi
+
+echo "yolodetect: exec: $*" >&2
+exec "$@"

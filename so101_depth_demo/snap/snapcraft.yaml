@@ -59,26 +59,14 @@ plugs:
 parts:
   depth-demo:
     plugin: colcon
-    # snapcraft.yaml lives at so101_depth_demo/snap/snapcraft.yaml, so the
-    # project root IS the so101_depth_demo package directory -- "." is just
-    # this one ROS package, so colcon/rosdep never sees unrelated sibling
-    # packages (e.g. so101_description) in the wider monorepo.
     source: .
     stage-packages:
       - libgomp1
-      # opencv-python-headless (cv2) dlopen()s liblapack.so.3/libblas.so.3 at
-      # runtime for linear-algebra ops. The debs install those under
-      # usr/lib/<triplet>/lapack|blas/, which isn't on the default library
-      # search path -- staged here and exposed via LD_LIBRARY_PATH in
-      # snap/local/depthanything-launch (same fix as the usb-cam snap's
-      # cv_bridge dependency).
+      # used by opencv-python-headless at runtime for linear-algebra ops.
       - liblapack3
       - libblas3
     build-packages:
       - python3-pip
-    # colcon builds the ROS package; then install the pure-Python inference
-    # dependencies (not available as rosdeps) into the Debian dist-packages
-    # path so they are on the default Python import path inside the snap.
     override-build: |
       craftctl default
       pip3 install \

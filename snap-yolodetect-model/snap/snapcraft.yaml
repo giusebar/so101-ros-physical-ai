@@ -1,0 +1,50 @@
+name: yolodetect-model
+base: core24
+version: '8.3.0'
+summary: YOLOv8n (nano) ONNX weights, NMS baked in, as a content snap
+description: |
+  Ships the YOLOv8n object-detection ONNX model (exported from Ultralytics'
+  official `yolov8n.pt` with NMS baked into the graph -- output0 is already
+  final [x1,y1,x2,y2,conf,cls] boxes, no separate NMS/decode step needed by
+  consumers) and exposes it through the snap `content` interface so that
+  consumer snaps (e.g. `yolodetect`) can mount the weights read-only at
+  runtime instead of bundling them.
+
+  This snap has no apps; it only provides the `yolodetect-model` content
+  slot. It is installed automatically as the `default-provider` when you run
+  `snap install yolodetect`, but it can also be installed on its own:
+
+      snap install yolodetect-model
+
+  Unlike `depthanything-model` (which pulls its weights from the Hugging
+  Face hub at build time), this model is vendored directly in the source
+  tree (models/yolov8n.onnx) -- no trustworthy pre-exported YOLOv8n ONNX
+  with matching export flags (imgsz=640, nms=True, opset=12) was found
+  hosted anywhere, so it was exported once locally:
+
+      pip install ultralytics onnx onnxslim
+      python3 -c "from ultralytics import YOLO; \
+        YOLO('yolov8n.pt').export(format='onnx', imgsz=640, dynamic=False, \
+        simplify=True, nms=True, opset=12)"
+
+  NOTE: the YOLOv8n weights (and the Ultralytics export tooling used to
+  produce this ONNX file) are AGPL-3.0 licensed by Ultralytics.
+
+grade: stable
+confinement: strict
+
+slots:
+  # Consumers connect their content plug to this slot to see the weights
+  # under their own $SNAP/models directory.
+  yolodetect-model:
+    interface: content
+    content: yolodetect-model
+    read:
+      - $SNAP/models
+
+parts:
+  model:
+    plugin: dump
+    source: models
+    organize:
+      yolov8n.onnx: models/yolov8n.onnx

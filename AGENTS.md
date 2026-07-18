@@ -50,26 +50,34 @@ before any follower restart. Prefer a physical e-stop nearby.
 | `so101_moveit_config` | MoveIt + **Servo** config: `so101_servo.yaml`, `kinematics.yaml` (`pick_ik`), `joint_limits.yaml`, SRDF, `servo.launch.py`. |
 | `so101_bringup` | Launch orchestration, ros2_control controller YAMLs, hardware joint configs, cameras, RViz. |
 | `so101_teleop` | Teleop C++ nodes: `teleop_split`, `teleop`, `leader_servo_jog`, `leader_sim_keyboard`. (Safety nodes `trajectory_safety_gate`/`safety_pause_bridge` moved to `so101_safety`.) |
-| `so101_safety` | Safety subsystem (mixed `ament_cmake`+`ament_cmake_python`): `depth_safety_monitor` (Python, perception-driven `/safety/protective_stop` trigger — pure topic consumer, no ML/vision deps) + `trajectory_safety_gate`/`safety_pause_bridge` (C++ enforcement, moved from `so101_teleop`). Home for future safety behaviours (diagnostics, watchdogs, ...). |
+| `so101_safety` | Safety subsystem (mixed `ament_cmake`+`ament_cmake_python`): `depth_safety_monitor` (depth-proximity trigger) + `person_safety_monitor` (detection-presence trigger, watches for a class e.g. `person` in the ROI) — both perception-driven `/safety/protective_stop` triggers, pure topic consumers (no ML/vision deps), sharing ROI-parsing/hysteresis-debounce logic via `safety_monitor_common.py` — + `trajectory_safety_gate`/`safety_pause_bridge` (C++ enforcement, moved from `so101_teleop`, shared by both monitors). Home for future safety behaviours (diagnostics, watchdogs, ...). |
 | `so101_depth_demo` | Depth-Anything inference only (`depth_anything_node`): publishes colorized viz (`/camera/depth/visualization`) AND raw normalised depth (`/perception/depth`, 32FC1) for `so101_safety` to consume. No safety logic lives here anymore. |
+| `so101_yolo_demo` | YOLOv8n (nano) object/person detection inference only (`yolo_detect_node`, NMS baked into the exported ONNX graph): publishes annotated viz (`/camera/detections/visualization`) AND `vision_msgs/Detection2DArray` (`/perception/detections`) for `so101_safety` to consume. The "swap the model, do something different" sibling of `so101_depth_demo` — same CPU/ONNX Runtime pattern and camera input, different recognition task. No safety logic lives here either. |
 | `feetech_ros2_driver` | Feetech STS ros2_control hardware interface (git submodule). |
 | `so101_camera_calibration` | Offline hand-eye calibration (the ONLY consumer of `so101_kinematics`). |
 | `so101_kinematics` / `_msgs` | **Legacy** custom IK (robokin/Placo/Viser). **Not used by any demo.** MoveIt/Servo get kinematics from `so101_moveit_config`. |
 | `episode_recorder`, `rosbag_to_lerobot`, `so101_inference`, `policy_server` | Physical-AI data/inference tooling. |
 | `snap-usb-cam` | Standalone strict-confinement snap packaging upstream `ros-drivers/usb_cam` (production alternative to the apt `usb_cam` dep). Configured via `snap set usb-cam device=... frame-id=... camera-name=... namespace=...`, not a params YAML. See `snap-usb-cam/snapcraft.yaml`. |
 | `depthanything` + `depthanything-model` | Strict-confinement snap pair for `depth_anything_node` (inference only, no safety logic). `depthanything` is an **always-on daemon** (like `usb-cam`) built from `so101_depth_demo/snap/snapcraft.yaml`, configured via `snap set depthanything input-image-topic=... output-image-topic=... output-depth-topic=...`. `depthanything-model` is a content-only snap shipping the ONNX weights, mounted at `$SNAP/models`. See `docs/depthanything_usbcam_setup.md` for the full setup/verify walkthrough. |
+| `yolodetect` + `yolodetect-model` | Strict-confinement snap pair for `yolo_detect_node` (inference only, no safety logic) — mirrors `depthanything`/`depthanything-model`'s conventions exactly. `yolodetect` is an **always-on daemon** built from `so101_yolo_demo/snap/snapcraft.yaml`, configured via `snap set yolodetect input-image-topic=... output-image-topic=... output-detections-topic=... class-filter=... conf-threshold=...`. `yolodetect-model` is a content-only snap shipping the ONNX weights (vendored in-repo, not downloaded at build time — see `snap-yolodetect-model/README.md`), mounted at `$SNAP/models`. See `docs/yolodetect_setup.md` for the full setup/verify/swap walkthrough. |
 
 Joint order everywhere: `[shoulder_pan, shoulder_lift, elbow_flex, wrist_flex,
 wrist_roll]` (+ `gripper` handled separately). Namespaces: `/leader`, `/follower`.
 
 ## The two real-hardware demos (mutually exclusive)
 
-Both bring up leader + follower + overhead camera + depth protective-stop + RViz.
+Both bring up leader + follower + overhead camera + protective-stop + RViz.
 Run one at a time (they share the follower and serial port). By default both
-assume the camera + depth model are already running externally (the
+assume the camera + perception model are already running externally (the
 `depthanything` + `usb-cam` snaps, per `docs/depthanything_usbcam_setup.md`);
-pass `launch_depth:=true` to bring the camera + `depth_anything_node` up
-inline instead.
+pass `launch_depth:=true` to bring the camera + perception node up inline
+instead. Both also accept `perception_backend:=depth|detection` (default
+`depth`) to choose whether the protective stop is driven by monocular-depth
+proximity (`depth_anything_node` / `depthanything` snap +
+`depth_safety_monitor`) or YOLOv8n person detection (`yolo_detect_node` /
+`yolodetect` snap + `person_safety_monitor`) — swap the running snap (see
+`docs/yolodetect_setup.md`) and pass the matching `perception_backend` value,
+no other launch args change.
 
 - **Servo:** `ros2 launch so101_depth_demo full_demo_real_servo.launch.py`
   - `leader_servo_jog` (P-controller on joint error) → `/follower/servo_node/delta_joint_cmds` (JointJog) → `servo_node` → `arm_forward_controller`.

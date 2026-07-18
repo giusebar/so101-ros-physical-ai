@@ -1,0 +1,89 @@
+name: yolodetect
+base: core24
+version: '0.1.0'
+summary: YOLOv8n (nano) object detection daemon for ROS 2 Jazzy
+description: |
+  CPU object detection for ROS 2 camera topics. Subscribes to a ROS 2 image
+  topic, runs YOLOv8n with ONNX Runtime (NMS baked into the exported graph),
+  and republishes both an annotated visualisation image (for viewing) and
+  machine-readable detections (vision_msgs/Detection2DArray) for downstream
+  consumers.
+
+  The model weights are NOT bundled in this snap. They are provided by the
+  separate `yolodetect-model` content snap and mounted read-only at
+  $SNAP/models via the content interface. `yolodetect-model` is installed
+  automatically as the default provider:
+
+      snap install yolodetect
+
+  Runs as an always-on daemon. Configure it with `snap set` instead of launch
+  arguments, e.g.:
+
+      snap set yolodetect input-image-topic=/my/camera/image_raw
+      snap set yolodetect output-image-topic=/camera/detections/visualization
+      snap set yolodetect output-detections-topic=/perception/detections
+      snap set yolodetect class-filter=person conf-threshold=0.4
+
+  Other options: input-size, min-period-s, intra-op-threads, namespace,
+  node-name, ros-domain-id, rmw-implementation.
+
+  Check status with `snap services yolodetect` / `snap logs yolodetect`.
+
+grade: stable
+confinement: strict
+
+apps:
+  yolodetect:
+    extensions: [ros2-jazzy]
+    command: usr/bin/yolodetect-launch
+    daemon: simple
+    install-mode: disable
+    restart-condition: on-failure
+    restart-delay: 5s
+    plugs:
+      - network
+      - network-bind
+
+hooks:
+  configure: {}
+
+plugs:
+  # Mounts the ONNX weights from the yolodetect-model snap under $SNAP/models.
+  # default-provider makes `snap install yolodetect` also install the model
+  # snap and auto-connect this content interface.
+  yolodetect-model:
+    interface: content
+    content: yolodetect-model
+    target: $SNAP/models
+    #default-provider: yolodetect-model
+
+parts:
+  yolo-demo:
+    plugin: colcon
+    source: .
+    stage-packages:
+      - libgomp1
+      - ros-jazzy-vision-msgs
+      # used by opencv-python-headless at runtime for linear-algebra ops
+      - liblapack3
+      - libblas3
+    build-packages:
+      - python3-pip
+    override-build: |
+      craftctl default
+      pip3 install \
+        --break-system-packages \
+        --no-compile \
+        --target="${CRAFT_PART_INSTALL}/usr/lib/python3/dist-packages" \
+        "onnxruntime" \
+        "numpy" \
+        "opencv-python-headless"
+
+  launcher:
+    plugin: dump
+    source: snap/local
+    organize:
+      yolodetect-launch: usr/bin/yolodetect-launch
+    override-build: |
+      craftctl default
+      chmod +x "${CRAFT_PART_INSTALL}/yolodetect-launch"

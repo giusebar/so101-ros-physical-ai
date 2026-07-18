@@ -22,15 +22,27 @@ JointTrajectory relay, matching the architecture used by ``so101_bringup``
      pauses/resumes Servo on it (Servo's own collision/joint-limit checking
      supersedes the ``trajectory_safety_gate`` used on the JointTrajectory
      path).
-  4. The camera + depth model (``depth_anything_node``) publishing the depth
-     topic that (3) consumes. By default this is assumed to be running
-     EXTERNALLY (e.g. the ``depthanything`` + ``usb-cam`` snaps, per
-     ``docs/depthanything_usbcam_setup.md``) -- set ``launch_depth:=true`` to
-     bring it up inline instead (useful for sim/dev without the snaps).
+  4. The camera + perception model publishing whatever topic (3) consumes.
+     By default this is assumed to be running EXTERNALLY (e.g. the
+     ``depthanything``/``yolodetect`` + ``usb-cam`` snaps, per
+     ``docs/depthanything_usbcam_setup.md`` / ``docs/yolodetect_setup.md``) --
+     set ``launch_depth:=true`` to bring it up inline instead (useful for
+     sim/dev without the snaps).
+
+  ``perception_backend`` selects which perception method drives the
+  protective stop, without touching anything else in this launch file:
+    - ``depth`` (default): monocular relative-depth proximity
+      (``depth_anything_node`` / ``depthanything`` snap +
+      ``depth_safety_monitor``).
+    - ``detection``: YOLOv8n person detection (``yolo_detect_node`` /
+      ``yolodetect`` snap + ``person_safety_monitor``). Swap to this after
+      installing the ``yolodetect`` (+ ``yolodetect-model``) snap in place of
+      ``depthanything`` -- see ``docs/yolodetect_setup.md``.
 
 Move the REAL leader arm by hand to drive the follower. Put your palm in front
-of the camera to raise /safety/protective_stop; Servo then halts (and later
-resumes) the follower until the obstacle clears.
+of the camera (depth backend) or step into frame (detection backend) to raise
+/safety/protective_stop; Servo then halts (and later resumes) the follower
+until the obstacle/person clears.
 
   ###########################################################################
   #  SAFETY WARNING                                                          #
@@ -48,14 +60,19 @@ Run (bring up camera + depth model inline instead of via snaps):
   ros2 launch so101_depth_demo full_demo_real_servo.launch.py \
     launch_depth:=true camera_device:=/dev/cam_overhead
 
+Run (detection backend, yolodetect/usb-cam snaps already running):
+  ros2 launch so101_depth_demo full_demo_real_servo.launch.py \
+    perception_backend:=detection
+
 Prerequisites:
   - LeRobot motor setup + calibration done on both arms (EEPROM written).
   - udev symlinks /dev/so101_leader, /dev/so101_follower (or override the
     *_usb_port args), and the user in the `dialout` group.
   - If launch_depth:=true: ONNX model at ~/models/depth_anything_v2_small.onnx
-    (so101_depth_demo/scripts/download_model.sh) and onnxruntime installed in
-    the interpreter ros2 uses. Otherwise, the depthanything snap already
-    bundles this.
+    (so101_depth_demo/scripts/download_model.sh, or ~/models/yolov8n.onnx for
+    perception_backend:=detection) and onnxruntime installed in the
+    interpreter ros2 uses. Otherwise, the depthanything/yolodetect snap
+    already bundles this.
 """
 
 import os
@@ -69,7 +86,11 @@ from launch.actions import (
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import (
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    PythonExpression,
+)
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
@@ -78,15 +99,32 @@ def generate_launch_description():
     leader_usb = LaunchConfiguration("leader_usb_port")
     follower_usb = LaunchConfiguration("follower_usb_port")
     camera_device = LaunchConfiguration("camera_device")
+    perception_backend = LaunchConfiguration("perception_backend")
+    is_depth_backend = PythonExpression(["'", perception_backend, "' == 'depth'"])
+    is_detection_backend = PythonExpression(["'", perception_backend, "' == 'detection'"])
     model_path = LaunchConfiguration("model_path")
+    yolo_model_path = LaunchConfiguration("yolo_model_path")
     safety_stop_topic = LaunchConfiguration("safety_stop_topic")
     debug_image_topic = LaunchConfiguration("debug_image_topic")
+    detection_debug_image_topic = LaunchConfiguration("detection_debug_image_topic")
+    detections_viz_topic = LaunchConfiguration("detections_viz_topic")
     image_topic = LaunchConfiguration("image_topic")
     depth_image_topic = LaunchConfiguration("depth_image_topic")
+    detections_topic = LaunchConfiguration("detections_topic")
     near_margin = LaunchConfiguration("near_margin")
     min_area_ratio = LaunchConfiguration("min_area_ratio")
     use_viewer = LaunchConfiguration("use_viewer")
     launch_depth = LaunchConfiguration("launch_depth")
+    # LaunchConfiguration.perform() returns the raw configured string (e.g.
+    # "true"/"false", lowercase) which is NOT valid Python -- PythonExpression
+    # evaluates its concatenated substitutions with eval(), so bare `true`
+    # raises "name 'true' is not defined". Compare as a quoted string instead
+    # (mirrors is_depth_backend/is_detection_backend above), then combine
+    # these boolean PythonExpressions with " and " below -- nested
+    # PythonExpressions are perform()'d to "True"/"False" before the outer
+    # expression is evaluated, so that combination is safe.
+    is_launch_depth = PythonExpression(["'", launch_depth, "' == 'true'"])
+    is_use_viewer = PythonExpression(["'", use_viewer, "' == 'true'"])
     # NOTE: deliberately NOT named "use_rviz" - leader.launch.py and
     # follower_split.launch.py both declare a launch argument with that exact
     # name (each hardcoded to "false" below so they don't pop their own RViz
@@ -176,8 +214,8 @@ def generate_launch_description():
         }.items(),
     )
 
-    # --- 3. Depth safety monitor + Servo pause bridge (so101_safety) --------
-    safety_stop = IncludeLaunchDescription(
+    # --- 3. Perception safety monitor + Servo pause bridge (so101_safety) ---
+    safety_stop_depth = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution(
                 [FindPackageShare("so101_safety"), "launch", "safety_stop_servo.launch.py"]
@@ -193,11 +231,29 @@ def generate_launch_description():
             "pause_service": "/follower/servo_node/pause_servo",
             "use_sim_time": "false",
         }.items(),
+        condition=IfCondition(is_depth_backend),
     )
 
-    # --- 4. Camera + depth model (optional, external by default) ------------
-    # Assumed to already be running externally (depthanything + usb-cam snaps)
-    # unless launch_depth:=true.
+    safety_stop_detection = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution(
+                [FindPackageShare("so101_safety"), "launch", "safety_stop_servo_yolo.launch.py"]
+            )
+        ),
+        launch_arguments={
+            "detections_topic": detections_topic,
+            "safety_stop_topic": safety_stop_topic,
+            "debug_image_topic": detection_debug_image_topic,
+            "publish_debug_image": use_viewer,
+            "pause_service": "/follower/servo_node/pause_servo",
+            "use_sim_time": "false",
+        }.items(),
+        condition=IfCondition(is_detection_backend),
+    )
+
+    # --- 4. Camera + perception model (optional, external by default) -------
+    # Assumed to already be running externally (depthanything/yolodetect +
+    # usb-cam snaps) unless launch_depth:=true.
     camera = Node(
         package="usb_cam",
         executable="usb_cam_node_exe",
@@ -229,19 +285,48 @@ def generate_launch_description():
             "input_image_topic": image_topic,
             "output_depth_topic": depth_image_topic,
         }.items(),
-        condition=IfCondition(launch_depth),
+        condition=IfCondition(PythonExpression([is_launch_depth, " and ", is_depth_backend])),
+    )
+
+    yolo_model = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution(
+                [FindPackageShare("so101_yolo_demo"), "launch", "yolo_demo.launch.py"]
+            )
+        ),
+        launch_arguments={
+            "model_path": yolo_model_path,
+            "input_image_topic": image_topic,
+            "output_image_topic": detections_viz_topic,
+            "output_detections_topic": detections_topic,
+        }.items(),
+        condition=IfCondition(PythonExpression([is_launch_depth, " and ", is_detection_backend])),
     )
 
     # --- Debug viewer -----------------------------------------------
     # Use C++ image_view instead of rqt_image_view to avoid PyQt5 import
     # issues in the workshop container.
-    viewer = Node(
+    viewer_depth = Node(
         package="image_view",
         executable="image_view",
         name="depth_proximity_viewer",
         output="screen",
         remappings=[("image", debug_image_topic)],
-        condition=IfCondition(use_viewer),
+        condition=IfCondition(PythonExpression([is_use_viewer, " and ", is_depth_backend])),
+    )
+
+    # Shows the ANNOTATED CAMERA VIEW (real image + bounding boxes/labels) --
+    # this is what actually shows a detected person, unlike
+    # depth_proximity_viewer's ROI-proximity overlay (there's no equivalent
+    # "raw camera + markup" view for the depth backend, since depth_safety_monitor
+    # only ever sees a normalised depth map, not the original frame).
+    viewer_detection = Node(
+        package="image_view",
+        executable="image_view",
+        name="detection_proximity_viewer",
+        output="screen",
+        remappings=[("image", detections_viz_topic)],
+        condition=IfCondition(PythonExpression([is_use_viewer, " and ", is_detection_backend])),
     )
 
     # --- 5. Layout TF + RViz ------------------------------------------------
@@ -285,11 +370,26 @@ def generate_launch_description():
                 "(only used if launch_depth:=true).",
             ),
             DeclareLaunchArgument(
+                "perception_backend",
+                default_value="depth",
+                description="Which perception method drives the protective "
+                "stop: 'depth' (depth_anything_node/depthanything snap + "
+                "depth_safety_monitor) or 'detection' (yolo_detect_node/"
+                "yolodetect snap + person_safety_monitor).",
+            ),
+            DeclareLaunchArgument(
                 "model_path",
                 default_value=os.path.expanduser(
                     "~/models/depth_anything_v2_small.onnx"
                 ),
-                description="Only used if launch_depth:=true.",
+                description="Only used if launch_depth:=true and "
+                "perception_backend:=depth.",
+            ),
+            DeclareLaunchArgument(
+                "yolo_model_path",
+                default_value=os.path.expanduser("~/models/yolov8n.onnx"),
+                description="Only used if launch_depth:=true and "
+                "perception_backend:=detection.",
             ),
             DeclareLaunchArgument(
                 "image_topic", default_value="/static_camera/image_raw"
@@ -302,10 +402,31 @@ def generate_launch_description():
                 "so101_safety's depth_safety_monitor.",
             ),
             DeclareLaunchArgument(
+                "detections_topic",
+                default_value="/perception/detections",
+                description="vision_msgs/Detection2DArray topic published by "
+                "yolo_detect_node (snap or inline) and consumed by "
+                "so101_safety's person_safety_monitor.",
+            ),
+            DeclareLaunchArgument(
                 "safety_stop_topic", default_value="/safety/protective_stop"
             ),
             DeclareLaunchArgument(
                 "debug_image_topic", default_value="/safety/depth_debug_image"
+            ),
+            DeclareLaunchArgument(
+                "detection_debug_image_topic",
+                default_value="/safety/detection_debug_image",
+                description="person_safety_monitor's synthetic ROI-overlap "
+                "gauge (NOT a camera view). Use detections_viz_topic to "
+                "see the actual annotated camera image.",
+            ),
+            DeclareLaunchArgument(
+                "detections_viz_topic",
+                default_value="/camera/detections/visualization",
+                description="yolo_detect_node's annotated camera view (real "
+                "image + bounding boxes/labels) -- what use_viewer opens for "
+                "the detection backend.",
             ),
             DeclareLaunchArgument("near_margin", default_value="0.15"),
             DeclareLaunchArgument("min_area_ratio", default_value="0.12"),
@@ -314,9 +435,9 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "launch_depth",
                 default_value="false",
-                description="Bring up the camera + depth_anything_node inline "
-                "instead of assuming the depthanything/usb-cam snaps are "
-                "already running externally.",
+                description="Bring up the camera + perception model inline "
+                "instead of assuming the depthanything/yolodetect + usb-cam "
+                "snaps are already running externally.",
             ),
             DeclareLaunchArgument(
                 "kp",
@@ -341,8 +462,11 @@ def generate_launch_description():
             layout_tf,
             camera,
             depth_model,
-            safety_stop,
-            viewer,
+            yolo_model,
+            safety_stop_depth,
+            safety_stop_detection,
+            viewer_depth,
+            viewer_detection,
             rviz_node,
             TimerAction(period=servo_start_delay, actions=[servo]),
             TimerAction(period=teleop_start_delay, actions=[teleop_servo]),
