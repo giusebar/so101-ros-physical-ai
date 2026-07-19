@@ -7,11 +7,12 @@ This is the "swap the model, do something different" sibling of
 [`so101_depth_demo`](../so101_depth_demo): same overall shape (ONNX Runtime
 CPU inference, subscribes to a ROS image topic, publishes a viz image +
 machine-readable topic), but recognises object classes (person, by default)
-instead of estimating depth. It feeds `so101_safety`'s
-`person_safety_monitor`, which raises the SAME `/safety/protective_stop`
-topic as `depth_safety_monitor` — so `safety_pause_bridge` /
-`trajectory_safety_gate` never need to change, only the perception method
-driving the stop.
+instead of estimating depth. It also computes and publishes
+`/safety/protective_stop` directly (ROI overlap on the already
+class-filtered detections + hysteresis debounce) — the SAME topic
+`depth_anything_node` publishes to — so `safety_pause_bridge` /
+`trajectory_safety_gate` (`so101_safety`, enforcement-only, perception-
+agnostic) never need to change, only the perception method driving the stop.
 
 ---
 
@@ -19,7 +20,7 @@ driving the stop.
 
 | Executable | Description |
 |---|---|
-| `yolo_detect_node` | Subscribes to an image topic, runs YOLOv8n ONNX detection (NMS baked in), publishes an annotated viz image + `vision_msgs/Detection2DArray`. |
+| `yolo_detect_node` | Subscribes to an image topic, runs YOLOv8n ONNX detection (NMS baked in), publishes an annotated viz image (with the safety ROI + trigger state overlaid) + `vision_msgs/Detection2DArray` + `std_msgs/Bool` protective-stop. |
 | `test_image_publisher` | Publishes a synthetic or static image so you can test with no camera. |
 
 ## Parameters (`yolo_detect_node`)
@@ -28,13 +29,18 @@ driving the stop.
 |---|---|---|
 | `model_path` | `~/models/yolov8n.onnx` | ONNX model file (NMS baked in — see below). |
 | `input_image_topic` | `/static_camera/image_raw` | Overhead camera topic in this repo. |
-| `output_image_topic` | `/camera/detections/visualization` | Annotated detection viz output. |
-| `output_detections_topic` | `/perception/detections` | `vision_msgs/Detection2DArray` for downstream consumers. |
+| `output_image_topic` | `/camera/detections/visualization` | Annotated detection viz output (boxes + labels + safety ROI/trigger overlay). |
+| `output_detections_topic` | `/perception/detections` | `vision_msgs/Detection2DArray` for other machine consumers. |
 | `input_size` | `640` | Square model input. |
 | `conf_threshold` | `0.4` | Minimum detection score to keep. |
 | `class_filter` | `person` | Comma-separated COCO class names/ids to keep; empty = all 80 classes. |
 | `min_period_s` | `0.0` | Min seconds between inferences (CPU throttle). |
 | `intra_op_threads` | `0` | ONNX Runtime threads (0 = library default). |
+| `stop_topic` | `/safety/protective_stop` | `std_msgs/Bool` protective-stop output. |
+| `roi` | `0.25,0.2,0.75,0.85` | Normalised `x1,y1,x2,y2` center ROI. |
+| `min_overlap_ratio` | `0.2` | Minimum fraction of a watched detection's box that must fall inside the ROI to count. |
+| `frames_to_block` | `2` | Consecutive triggered frames to assert stop. |
+| `frames_to_clear` | `3` | Consecutive clear frames to release stop. |
 
 ---
 
@@ -58,9 +64,10 @@ YOLO('yolov8n.pt').export(
 mkdir -p ~/models && cp yolov8n.onnx ~/models/yolov8n.onnx
 ```
 
-The same file is vendored (not re-downloaded) in
-[`../snap-yolodetect-model/models/yolov8n.onnx`](../snap-yolodetect-model/models/yolov8n.onnx)
-for the packaged snap — see that directory's README for why.
+The same file is vendored (not re-downloaded) at
+[`models/yolov8n.onnx`](models/yolov8n.onnx) and bundled directly into the
+packaged `ai-vision-ros2` snap at build time (no content interface, no
+separate model snap) — see `docs/ai_vision_ros2_channel_demo.md`.
 
 **Licensing note:** the YOLOv8n weights and the Ultralytics export tooling
 are AGPL-3.0 licensed by Ultralytics.
@@ -120,9 +127,11 @@ ros2 launch so101_depth_demo full_demo_real_servo.launch.py perception_backend:=
 ros2 launch so101_depth_demo full_demo_real_split.launch.py perception_backend:=detection
 ```
 
-See [`docs/yolodetect_setup.md`](../docs/yolodetect_setup.md) for the
-snap-based (production) setup, and [`docs/demo_runbook.md`](../docs/demo_runbook.md)
-for the full hardware runbook.
+See [`docs/ai_vision_ros2_channel_demo.md`](../docs/ai_vision_ros2_channel_demo.md)
+for the snap-based (production) setup -- including the single-snap,
+channel-swap demo with the depth variant -- and
+[`docs/demo_runbook.md`](../docs/demo_runbook.md) for the full hardware
+runbook.
 
 ---
 

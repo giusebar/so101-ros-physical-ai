@@ -1,5 +1,14 @@
 # yolodetect + usb-cam snap setup
 
+> **On this branch (`feat/ai-vision-ros2-single-snap`), the `yolodetect` +
+> `yolodetect-model` content-interface snap pair described below has been
+> replaced by a single bundled-model snap, `ai-vision-ros2` (latest/edge
+> channel) — no content interface, no `snap connect` step. See
+> [`ai_vision_ros2_channel_demo.md`](ai_vision_ros2_channel_demo.md) for the
+> current setup and the `snap refresh --channel=...` swap demo. This doc is
+> kept for reference / the `usb-cam` portion (still used as-is) and describes
+> the older two-snap architecture.**
+
 Quick guide to stand up the detection-based perception pipeline entirely
 from snaps — **`usb-cam`** (camera) → **`yolodetect`** (ONNX YOLOv8n
 detection) — no ROS workspace build required on the target machine. This is

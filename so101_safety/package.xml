@@ -4,31 +4,29 @@
   <name>so101_safety</name>
   <version>0.1.0</version>
   <description>
-    SO-101 safety subsystem: perception-driven protective-stop triggers
-    (depth_safety_monitor for monocular-depth proximity, person_safety_monitor
-    for detection-based presence) and their shared enforcement nodes
-    (trajectory_safety_gate for the JointTrajectory/JTC path,
-    safety_pause_bridge for the MoveIt Servo path). Decoupled from
-    so101_depth_demo / so101_yolo_demo -- the monitor nodes consume an
-    already-published perception topic rather than running their own model
-    inference, so this package has no ONNX/OpenCV dependencies. Intended as
+    SO-101 safety subsystem: shared enforcement nodes for the protective-stop
+    contract (trajectory_safety_gate for the JointTrajectory/JTC path,
+    safety_pause_bridge for the MoveIt Servo path). Pure C++, no perception
+    or ML/vision dependencies -- both nodes just subscribe to
+    /safety/protective_stop (std_msgs/Bool). For the ai-vision-ros2 single
+    snap demo, the perception-driven trigger logic (ROI/thresholds/hysteresis)
+    lives directly in each AI snap's own node (so101_depth_demo's
+    depth_anything_node, so101_yolo_demo's yolo_detect_node), which publish
+    that topic directly -- so swapping the AI backend via
+    `snap refresh --channel=...` swaps the entire behaviour, including what
+    counts as a protective stop, without needing any change here. Intended as
     the home for future safety behaviours (diagnostics, watchdogs, ...).
   </description>
   <maintainer email="giuseppe.barbieri@canonical.com">Giuseppe Barbieri</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <buildtool_depend>ament_cmake_python</buildtool_depend>
 
   <depend>rclcpp</depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>trajectory_msgs</depend>
   <depend>std_srvs</depend>
-
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>python3-numpy</exec_depend>
-  <exec_depend>vision_msgs</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

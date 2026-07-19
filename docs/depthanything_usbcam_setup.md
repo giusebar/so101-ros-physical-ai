@@ -1,5 +1,15 @@
 # DepthAnything + usb-cam snap setup
 
+> **On this branch (`feat/ai-vision-ros2-single-snap`), the `depthanything` +
+> `depthanything-model` content-interface snap pair described below has been
+> replaced by a single bundled-model snap, `ai-vision-ros2` (latest/stable
+> channel) — no content interface, no `snap connect` step, no
+> `default-provider` build gotcha. See
+> [`ai_vision_ros2_channel_demo.md`](ai_vision_ros2_channel_demo.md) for the
+> current setup and the `snap refresh --channel=...` swap demo. This doc is
+> kept for reference / the `usb-cam` portion (still used as-is) and describes
+> the older two-snap architecture.**
+
 Quick guide to stand up the real perception pipeline entirely from snaps —
 **`usb-cam`** (camera) → **`depthanything`** (ONNX depth inference) — no ROS
 workspace build required on the target machine.

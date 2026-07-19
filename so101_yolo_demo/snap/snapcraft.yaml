@@ -1,39 +1,52 @@
-name: yolodetect
+name: ai-vision-ros2
 base: core24
-version: '0.1.0'
-summary: YOLOv8n (nano) object detection daemon for ROS 2 Jazzy
+version: '1.0.0-yolo'
+summary: SO-101 YOLOv8n (nano) person/object detection (ROS 2 Jazzy)
 description: |
-  CPU object detection for ROS 2 camera topics. Subscribes to a ROS 2 image
-  topic, runs YOLOv8n with ONNX Runtime (NMS baked into the exported graph),
-  and republishes both an annotated visualisation image (for viewing) and
-  machine-readable detections (vision_msgs/Detection2DArray) for downstream
-  consumers.
+  CPU object detection for the SO-101 arm's workspace camera. Subscribes to a
+  ROS 2 image topic, runs YOLOv8n with ONNX Runtime (NMS baked into the
+  exported graph), and republishes an annotated visualisation image (for
+  viewing, with the safety ROI/trigger overlaid), machine-readable
+  detections (vision_msgs/Detection2DArray), and a std_msgs/Bool
+  protective-stop signal computed directly by this node (ROI overlap on the
+  already class-filtered detections + hysteresis debounce).
 
-  The model weights are NOT bundled in this snap. They are provided by the
-  separate `yolodetect-model` content snap and mounted read-only at
-  $SNAP/models via the content interface. `yolodetect-model` is installed
-  automatically as the default provider:
+  This is the "ai-vision-ros2" snap's PERSON-DETECTION variant, published on
+  the latest/edge channel. The model weights are bundled directly in this
+  snap (vendored in-repo, NMS baked in) -- no content interface, no separate
+  model snap, no manual `snap connect` step required.
 
-      snap install yolodetect
+  The SAME snap name also has a completely different DEPTH-PROXIMITY variant
+  (Depth Anything V2 Small, so101_depth_demo) published on latest/stable --
+  swap between them live with:
 
-  Runs as an always-on daemon. Configure it with `snap set` instead of launch
-  arguments, e.g.:
+      snap refresh ai-vision-ros2 --channel=stable   # -> depth proximity
+      snap refresh ai-vision-ros2 --channel=edge      # -> back to person detection
 
-      snap set yolodetect input-image-topic=/my/camera/image_raw
-      snap set yolodetect output-image-topic=/camera/detections/visualization
-      snap set yolodetect output-detections-topic=/perception/detections
-      snap set yolodetect class-filter=person conf-threshold=0.4
+  Runs as an always-on daemon (like `usb-cam`). Configure it with `snap set`
+  instead of launch arguments, e.g.:
+
+      snap set ai-vision-ros2 input-image-topic=/my/camera/image_raw
+      snap set ai-vision-ros2 output-image-topic=/camera/detections/visualization
+      snap set ai-vision-ros2 output-detections-topic=/perception/detections
+      snap set ai-vision-ros2 class-filter=person conf-threshold=0.4
 
   Other options: input-size, min-period-s, intra-op-threads, namespace,
-  node-name, ros-domain-id, rmw-implementation.
+  node-name, ros-domain-id, rmw-implementation, stop-topic, roi,
+  min-overlap-ratio, frames-to-block, frames-to-clear (protective-stop
+  trigger tuning).
 
-  Check status with `snap services yolodetect` / `snap logs yolodetect`.
+  Check status with `snap services ai-vision-ros2` / `snap logs ai-vision-ros2`.
 
 grade: stable
 confinement: strict
 
 apps:
-  yolodetect:
+  # Shared app/service name with the depth variant (so101_depth_demo's
+  # snapcraft.yaml) so `snap services ai-vision-ros2` / the systemd unit stay
+  # identically named across a `snap refresh --channel=...` swap, even though
+  # the two variants are completely different ROS packages under the hood.
+  perception:
     extensions: [ros2-jazzy]
     command: usr/bin/yolodetect-launch
     daemon: simple
@@ -47,24 +60,19 @@ apps:
 hooks:
   configure: {}
 
-plugs:
-  # Mounts the ONNX weights from the yolodetect-model snap under $SNAP/models.
-  # default-provider makes `snap install yolodetect` also install the model
-  # snap and auto-connect this content interface.
-  yolodetect-model:
-    interface: content
-    content: yolodetect-model
-    target: $SNAP/models
-    #default-provider: yolodetect-model
-
 parts:
   yolo-demo:
     plugin: colcon
+    # snapcraft.yaml lives at so101_yolo_demo/snap/snapcraft.yaml, so the
+    # project root IS the so101_yolo_demo package directory -- "." is just
+    # this one ROS package, so colcon/rosdep never sees unrelated sibling
+    # packages in the wider monorepo.
     source: .
     stage-packages:
       - libgomp1
       - ros-jazzy-vision-msgs
-      # used by opencv-python-headless at runtime for linear-algebra ops
+      # opencv-python-headless (cv2) dlopen()s liblapack.so.3/libblas.so.3 at
+      # runtime -- same fix as depthanything/usb-cam.
       - liblapack3
       - libblas3
     build-packages:
@@ -78,6 +86,13 @@ parts:
         "onnxruntime" \
         "numpy" \
         "opencv-python-headless"
+
+  # Model weights bundled directly into this snap
+  model:
+    plugin: dump
+    source: models
+    organize:
+      yolov8n.onnx: models/yolov8n.onnx
 
   launcher:
     plugin: dump

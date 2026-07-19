@@ -29,8 +29,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "output_detections_topic",
             default_value="/perception/detections",
-            description="vision_msgs/Detection2DArray topic for downstream "
-            "consumers, e.g. so101_safety's person_safety_monitor.",
+            description="vision_msgs/Detection2DArray topic for other "
+            "machine consumers.",
         ),
         DeclareLaunchArgument("input_size", default_value="640"),
         DeclareLaunchArgument("conf_threshold", default_value="0.4"),
@@ -46,6 +46,17 @@ def generate_launch_description():
             description="Minimum seconds between inferences (CPU throttle).",
         ),
         DeclareLaunchArgument("intra_op_threads", default_value="0"),
+        DeclareLaunchArgument(
+            "stop_topic",
+            default_value="/safety/protective_stop",
+            description="Bool protective-stop output, computed directly by "
+            "this node from ROI overlap + hysteresis debounce over the "
+            "already class/confidence-filtered detections.",
+        ),
+        DeclareLaunchArgument("roi", default_value="0.25,0.2,0.75,0.85"),
+        DeclareLaunchArgument("min_overlap_ratio", default_value="0.2"),
+        DeclareLaunchArgument("frames_to_block", default_value="2"),
+        DeclareLaunchArgument("frames_to_clear", default_value="3"),
     ]
 
     detect_node = Node(
@@ -64,6 +75,11 @@ def generate_launch_description():
                 "class_filter": LaunchConfiguration("class_filter"),
                 "min_period_s": LaunchConfiguration("min_period_s"),
                 "intra_op_threads": LaunchConfiguration("intra_op_threads"),
+                "stop_topic": LaunchConfiguration("stop_topic"),
+                "roi": LaunchConfiguration("roi"),
+                "min_overlap_ratio": LaunchConfiguration("min_overlap_ratio"),
+                "frames_to_block": LaunchConfiguration("frames_to_block"),
+                "frames_to_clear": LaunchConfiguration("frames_to_clear"),
             }
         ],
     )

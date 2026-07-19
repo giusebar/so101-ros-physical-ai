@@ -1,4 +1,4 @@
-"""Full SO-101 depth safety-stop demo on REAL hardware, via MoveIt Servo.
+"""Full SO-101 depth/detection safety-stop demo on REAL hardware, via MoveIt Servo.
 
 Real-hardware counterpart to ``full_demo_sim.launch.py`` (Gazebo), and the
 MoveIt-Servo counterpart to ``full_demo_real_split.launch.py``. Routes the
@@ -16,28 +16,29 @@ JointTrajectory relay, matching the architecture used by ``so101_bringup``
      (``so101_teleop``) that reads ``/leader/joint_states`` +
      ``/follower/joint_states`` and drives Servo with JointJog commands
      (gripper forwarded directly, since it is outside the Servo move group).
-  3. ``so101_safety``'s ``safety_stop_servo.launch.py``: a
-     ``depth_safety_monitor`` that consumes the depth topic and raises
-     ``/safety/protective_stop``, plus ``safety_pause_bridge`` that
-     pauses/resumes Servo on it (Servo's own collision/joint-limit checking
-     supersedes the ``trajectory_safety_gate`` used on the JointTrajectory
-     path).
-  4. The camera + perception model publishing whatever topic (3) consumes.
-     By default this is assumed to be running EXTERNALLY (e.g. the
-     ``depthanything``/``yolodetect`` + ``usb-cam`` snaps, per
-     ``docs/depthanything_usbcam_setup.md`` / ``docs/yolodetect_setup.md``) --
-     set ``launch_depth:=true`` to bring it up inline instead (useful for
-     sim/dev without the snaps).
+  3. ``so101_safety``'s ``safety_stop_servo.launch.py``: just
+     ``safety_pause_bridge``, which pauses/resumes Servo whenever
+     ``/safety/protective_stop`` is asserted (Servo's own collision/joint-limit
+     checking supersedes the ``trajectory_safety_gate`` used on the
+     JointTrajectory path). This node is perception-agnostic -- it doesn't
+     care WHO publishes the stop signal.
+  4. The camera + AI perception, publishing ``/safety/protective_stop``
+     directly (the "ai-vision-ros2" single-snap architecture: each AI
+     backend's own node computes its own trigger logic and publishes this
+     topic itself -- see so101_depth_demo's depth_anything_node /
+     so101_yolo_demo's yolo_detect_node). By default this is assumed to be
+     running EXTERNALLY (the ``ai-vision-ros2`` + ``usb-cam`` snaps, per
+     ``docs/ai_vision_ros2_channel_demo.md``) -- set ``launch_depth:=true`` to
+     bring it up inline instead (useful for sim/dev without the snap).
 
-  ``perception_backend`` selects which perception method drives the
-  protective stop, without touching anything else in this launch file:
-    - ``depth`` (default): monocular relative-depth proximity
-      (``depth_anything_node`` / ``depthanything`` snap +
-      ``depth_safety_monitor``).
-    - ``detection``: YOLOv8n person detection (``yolo_detect_node`` /
-      ``yolodetect`` snap + ``person_safety_monitor``). Swap to this after
-      installing the ``yolodetect`` (+ ``yolodetect-model``) snap in place of
-      ``depthanything`` -- see ``docs/yolodetect_setup.md``.
+  Since the protective-stop trigger logic now lives entirely inside whichever
+  AI perception node is running, swapping AI backends via
+  ``snap refresh ai-vision-ros2 --channel=stable|edge`` changes the ENTIRE
+  safety behaviour with NO restart of this launch file needed at all.
+  ``perception_backend`` only still matters for ``launch_depth:=true``
+  (which node to bring up inline) and which viz topic ``use_viewer`` opens --
+  it has nothing to do with safety-monitor selection any more (there is no
+  separate monitor).
 
 Move the REAL leader arm by hand to drive the follower. Put your palm in front
 of the camera (depth backend) or step into frame (detection backend) to raise
@@ -46,23 +47,23 @@ until the obstacle/person clears.
 
   ###########################################################################
   #  SAFETY WARNING                                                          #
-  #  This "protective stop" is EXPERIMENTAL CPU monocular-depth inference at #
-  #  ~1 Hz. It is NOT a functional-safety system: expect up to ~1 s of       #
-  #  reaction latency, and it only pauses MoveIt Servo. Keep a physical      #
-  #  e-stop / power cut as the real safety mechanism. Test with the arm      #
-  #  clear of people first.                                                 #
+  #  This "protective stop" is EXPERIMENTAL CPU perception at ~1-8 Hz. It   #
+  #  is NOT a functional-safety system: expect up to ~1 s of reaction        #
+  #  latency, and it only pauses MoveIt Servo. Keep a physical e-stop /      #
+  #  power cut as the real safety mechanism. Test with the arm clear of      #
+  #  people first.                                                          #
   ###########################################################################
 
-Run (depthanything/usb-cam snaps already running, the default):
+Run (ai-vision-ros2/usb-cam snaps already running, the default):
   ros2 launch so101_depth_demo full_demo_real_servo.launch.py
 
-Run (bring up camera + depth model inline instead of via snaps):
+Run (bring up camera + depth model inline instead of via the snap):
   ros2 launch so101_depth_demo full_demo_real_servo.launch.py \
     launch_depth:=true camera_device:=/dev/cam_overhead
 
-Run (detection backend, yolodetect/usb-cam snaps already running):
+Run (detection backend inline, for dev/testing without the snap):
   ros2 launch so101_depth_demo full_demo_real_servo.launch.py \
-    perception_backend:=detection
+    perception_backend:=detection launch_depth:=true
 
 Prerequisites:
   - LeRobot motor setup + calibration done on both arms (EEPROM written).
@@ -71,8 +72,8 @@ Prerequisites:
   - If launch_depth:=true: ONNX model at ~/models/depth_anything_v2_small.onnx
     (so101_depth_demo/scripts/download_model.sh, or ~/models/yolov8n.onnx for
     perception_backend:=detection) and onnxruntime installed in the
-    interpreter ros2 uses. Otherwise, the depthanything/yolodetect snap
-    already bundles this.
+    interpreter ros2 uses. Otherwise, the ai-vision-ros2 snap already bundles
+    this (whichever channel you've installed).
 """
 
 import os
@@ -105,14 +106,9 @@ def generate_launch_description():
     model_path = LaunchConfiguration("model_path")
     yolo_model_path = LaunchConfiguration("yolo_model_path")
     safety_stop_topic = LaunchConfiguration("safety_stop_topic")
-    debug_image_topic = LaunchConfiguration("debug_image_topic")
-    detection_debug_image_topic = LaunchConfiguration("detection_debug_image_topic")
+    depth_viz_topic = LaunchConfiguration("depth_viz_topic")
     detections_viz_topic = LaunchConfiguration("detections_viz_topic")
     image_topic = LaunchConfiguration("image_topic")
-    depth_image_topic = LaunchConfiguration("depth_image_topic")
-    detections_topic = LaunchConfiguration("detections_topic")
-    near_margin = LaunchConfiguration("near_margin")
-    min_area_ratio = LaunchConfiguration("min_area_ratio")
     use_viewer = LaunchConfiguration("use_viewer")
     launch_depth = LaunchConfiguration("launch_depth")
     # LaunchConfiguration.perform() returns the raw configured string (e.g.
@@ -214,46 +210,23 @@ def generate_launch_description():
         }.items(),
     )
 
-    # --- 3. Perception safety monitor + Servo pause bridge (so101_safety) ---
-    safety_stop_depth = IncludeLaunchDescription(
+    # --- 3. Servo pause bridge (so101_safety, perception-agnostic) ----------
+    safety_stop = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution(
                 [FindPackageShare("so101_safety"), "launch", "safety_stop_servo.launch.py"]
             )
         ),
         launch_arguments={
-            "depth_image_topic": depth_image_topic,
             "safety_stop_topic": safety_stop_topic,
-            "debug_image_topic": debug_image_topic,
-            "near_margin": near_margin,
-            "min_area_ratio": min_area_ratio,
-            "publish_debug_image": use_viewer,
             "pause_service": "/follower/servo_node/pause_servo",
             "use_sim_time": "false",
         }.items(),
-        condition=IfCondition(is_depth_backend),
     )
 
-    safety_stop_detection = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            PathJoinSubstitution(
-                [FindPackageShare("so101_safety"), "launch", "safety_stop_servo_yolo.launch.py"]
-            )
-        ),
-        launch_arguments={
-            "detections_topic": detections_topic,
-            "safety_stop_topic": safety_stop_topic,
-            "debug_image_topic": detection_debug_image_topic,
-            "publish_debug_image": use_viewer,
-            "pause_service": "/follower/servo_node/pause_servo",
-            "use_sim_time": "false",
-        }.items(),
-        condition=IfCondition(is_detection_backend),
-    )
-
-    # --- 4. Camera + perception model (optional, external by default) -------
-    # Assumed to already be running externally (depthanything/yolodetect +
-    # usb-cam snaps) unless launch_depth:=true.
+    # --- 4. Camera + AI perception (optional, external by default) ---------
+    # Assumed to already be running externally (ai-vision-ros2 + usb-cam
+    # snaps) unless launch_depth:=true.
     camera = Node(
         package="usb_cam",
         executable="usb_cam_node_exe",
@@ -283,7 +256,8 @@ def generate_launch_description():
         launch_arguments={
             "model_path": model_path,
             "input_image_topic": image_topic,
-            "output_depth_topic": depth_image_topic,
+            "output_image_topic": depth_viz_topic,
+            "stop_topic": safety_stop_topic,
         }.items(),
         condition=IfCondition(PythonExpression([is_launch_depth, " and ", is_depth_backend])),
     )
@@ -298,35 +272,26 @@ def generate_launch_description():
             "model_path": yolo_model_path,
             "input_image_topic": image_topic,
             "output_image_topic": detections_viz_topic,
-            "output_detections_topic": detections_topic,
+            "stop_topic": safety_stop_topic,
         }.items(),
         condition=IfCondition(PythonExpression([is_launch_depth, " and ", is_detection_backend])),
     )
 
     # --- Debug viewer -----------------------------------------------
-    # Use C++ image_view instead of rqt_image_view to avoid PyQt5 import
-    # issues in the workshop container.
-    viewer_depth = Node(
-        package="image_view",
-        executable="image_view",
-        name="depth_proximity_viewer",
+    # rqt_image_view has a live topic-selector dropdown built in, so a
+    # single instance covers both backends -- no relaunch, no
+    # perception_backend coupling needed at all: switch topics in the GUI
+    # (/camera/depth/visualization or /camera/detections/visualization)
+    # whenever you `snap refresh ai-vision-ros2 --channel=...`, matching the
+    # "zero ROS-side restart" swap. Each viz topic is the REAL camera view
+    # (colorised depth / annotated detections) with the safety ROI and
+    # trigger state drawn directly onto it by the perception node itself.
+    viewer = Node(
+        package="rqt_image_view",
+        executable="rqt_image_view",
+        name="perception_viewer",
         output="screen",
-        remappings=[("image", debug_image_topic)],
-        condition=IfCondition(PythonExpression([is_use_viewer, " and ", is_depth_backend])),
-    )
-
-    # Shows the ANNOTATED CAMERA VIEW (real image + bounding boxes/labels) --
-    # this is what actually shows a detected person, unlike
-    # depth_proximity_viewer's ROI-proximity overlay (there's no equivalent
-    # "raw camera + markup" view for the depth backend, since depth_safety_monitor
-    # only ever sees a normalised depth map, not the original frame).
-    viewer_detection = Node(
-        package="image_view",
-        executable="image_view",
-        name="detection_proximity_viewer",
-        output="screen",
-        remappings=[("image", detections_viz_topic)],
-        condition=IfCondition(PythonExpression([is_use_viewer, " and ", is_detection_backend])),
+        condition=IfCondition(is_use_viewer),
     )
 
     # --- 5. Layout TF + RViz ------------------------------------------------
@@ -372,10 +337,15 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "perception_backend",
                 default_value="depth",
-                description="Which perception method drives the protective "
-                "stop: 'depth' (depth_anything_node/depthanything snap + "
-                "depth_safety_monitor) or 'detection' (yolo_detect_node/"
-                "yolodetect snap + person_safety_monitor).",
+                description="Only affects launch_depth:=true -- which node "
+                "(depth_anything_node or yolo_detect_node) to bring up "
+                "inline for dev/testing without the ai-vision-ros2 snap. "
+                "Has no effect when the snap is used externally (the "
+                "default), and no effect on safety-monitor selection or on "
+                "the viewer, since the protective-stop trigger logic lives "
+                "directly in whichever AI perception node is actually "
+                "running, and the viewer (rqt_image_view) lets you pick "
+                "the topic live from its own dropdown.",
             ),
             DeclareLaunchArgument(
                 "model_path",
@@ -395,49 +365,43 @@ def generate_launch_description():
                 "image_topic", default_value="/static_camera/image_raw"
             ),
             DeclareLaunchArgument(
-                "depth_image_topic",
-                default_value="/perception/depth",
-                description="Raw normalised depth (32FC1) topic published by "
-                "depth_anything_node (snap or inline) and consumed by "
-                "so101_safety's depth_safety_monitor.",
+                "safety_stop_topic",
+                default_value="/safety/protective_stop",
+                description="Bool protective-stop topic, published directly "
+                "by whichever AI perception node (snap or inline) is "
+                "running, consumed by safety_pause_bridge.",
             ),
             DeclareLaunchArgument(
-                "detections_topic",
-                default_value="/perception/detections",
-                description="vision_msgs/Detection2DArray topic published by "
-                "yolo_detect_node (snap or inline) and consumed by "
-                "so101_safety's person_safety_monitor.",
-            ),
-            DeclareLaunchArgument(
-                "safety_stop_topic", default_value="/safety/protective_stop"
-            ),
-            DeclareLaunchArgument(
-                "debug_image_topic", default_value="/safety/depth_debug_image"
-            ),
-            DeclareLaunchArgument(
-                "detection_debug_image_topic",
-                default_value="/safety/detection_debug_image",
-                description="person_safety_monitor's synthetic ROI-overlap "
-                "gauge (NOT a camera view). Use detections_viz_topic to "
-                "see the actual annotated camera image.",
+                "depth_viz_topic",
+                default_value="/camera/depth/visualization",
+                description="depth_anything_node's colorised depth view "
+                "with the safety ROI + trigger state overlaid -- pick this "
+                "in the rqt_image_view dropdown (use_viewer) to watch the "
+                "depth backend.",
             ),
             DeclareLaunchArgument(
                 "detections_viz_topic",
                 default_value="/camera/detections/visualization",
                 description="yolo_detect_node's annotated camera view (real "
-                "image + bounding boxes/labels) -- what use_viewer opens for "
-                "the detection backend.",
+                "image + bounding boxes/labels + safety ROI/trigger state "
+                "overlaid) -- pick this in the rqt_image_view dropdown "
+                "(use_viewer) to watch the detection backend.",
             ),
-            DeclareLaunchArgument("near_margin", default_value="0.15"),
-            DeclareLaunchArgument("min_area_ratio", default_value="0.12"),
-            DeclareLaunchArgument("use_viewer", default_value="false"),
+            DeclareLaunchArgument(
+                "use_viewer",
+                default_value="false",
+                description="Open a single rqt_image_view window (topic "
+                "picked live from its own dropdown -- switch between "
+                "depth_viz_topic/detections_viz_topic yourself, including "
+                "after a snap refresh, no relaunch needed).",
+            ),
             DeclareLaunchArgument("use_teleop_rviz", default_value="true"),
             DeclareLaunchArgument(
                 "launch_depth",
                 default_value="false",
                 description="Bring up the camera + perception model inline "
-                "instead of assuming the depthanything/yolodetect + usb-cam "
-                "snaps are already running externally.",
+                "instead of assuming the ai-vision-ros2 + usb-cam snaps are "
+                "already running externally.",
             ),
             DeclareLaunchArgument(
                 "kp",
@@ -463,10 +427,8 @@ def generate_launch_description():
             camera,
             depth_model,
             yolo_model,
-            safety_stop_depth,
-            safety_stop_detection,
-            viewer_depth,
-            viewer_detection,
+            safety_stop,
+            viewer,
             rviz_node,
             TimerAction(period=servo_start_delay, actions=[servo]),
             TimerAction(period=teleop_start_delay, actions=[teleop_servo]),

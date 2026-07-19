@@ -30,8 +30,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "output_depth_topic",
             default_value="/perception/depth",
-            description="Raw normalised depth (32FC1) topic for downstream "
-            "consumers, e.g. so101_safety's depth_safety_monitor.",
+            description="Raw normalised depth (32FC1) topic for other "
+            "machine consumers.",
         ),
         # Multiple of 14 (ViT patch size); 308 runs ~2.8x faster than native 518.
         DeclareLaunchArgument("model_input_size", default_value="308"),
@@ -43,6 +43,18 @@ def generate_launch_description():
             description="Minimum seconds between inferences (CPU throttle).",
         ),
         DeclareLaunchArgument("intra_op_threads", default_value="0"),
+        DeclareLaunchArgument(
+            "stop_topic",
+            default_value="/safety/protective_stop",
+            description="Bool protective-stop output, computed directly by "
+            "this node from ROI proximity + hysteresis debounce.",
+        ),
+        DeclareLaunchArgument("roi", default_value="0.25,0.2,0.75,0.85"),
+        DeclareLaunchArgument("near_threshold", default_value="0.6"),
+        DeclareLaunchArgument("near_margin", default_value="0.15"),
+        DeclareLaunchArgument("min_area_ratio", default_value="0.12"),
+        DeclareLaunchArgument("frames_to_block", default_value="2"),
+        DeclareLaunchArgument("frames_to_clear", default_value="3"),
         DeclareLaunchArgument(
             "use_display",
             default_value="false",
@@ -66,6 +78,13 @@ def generate_launch_description():
                 "publish_height": LaunchConfiguration("publish_height"),
                 "min_period_s": LaunchConfiguration("min_period_s"),
                 "intra_op_threads": LaunchConfiguration("intra_op_threads"),
+                "stop_topic": LaunchConfiguration("stop_topic"),
+                "roi": LaunchConfiguration("roi"),
+                "near_threshold": LaunchConfiguration("near_threshold"),
+                "near_margin": LaunchConfiguration("near_margin"),
+                "min_area_ratio": LaunchConfiguration("min_area_ratio"),
+                "frames_to_block": LaunchConfiguration("frames_to_block"),
+                "frames_to_clear": LaunchConfiguration("frames_to_clear"),
             }
         ],
     )

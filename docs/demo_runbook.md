@@ -248,22 +248,18 @@ ros2 run usb_cam usb_cam_node_exe --ros-args \
   --params-file $(ros2 pkg prefix so101_bringup)/share/so101_bringup/config/cameras/so101_usb_cam.yaml \
   -p video_device:=/dev/video4 -p camera_name:=cam_overhead -p frame_id:=cam_overhead
 
-# T5 — depth model (perception only; publishes /perception/depth + colorised viz)
-# Assumed to already be running externally as the depthanything snap in the
+# T5 — depth model (perception + protective-stop; publishes /perception/depth,
+# colorised viz with the safety ROI/trigger overlaid, and /safety/protective_stop
+# directly -- see docs/ai_vision_ros2_channel_demo.md. On this branch there is
+# no separate depth_safety_monitor step (T5b); the trigger logic lives here.)
+# Assumed to already be running externally as the ai-vision-ros2 snap in the
 # one-launch version above; shown here inline for the manual decomposition.
 ros2 run so101_depth_demo depth_anything_node --ros-args \
   -p model_path:=$HOME/models/depth_anything_v2_small.onnx \
   -p input_image_topic:=/static_camera/image_raw \
   -p output_depth_topic:=/perception/depth \
-  -p output_image_topic:=/camera/depth/visualization
-
-# T5b — depth safety monitor -> /safety/protective_stop (pure topic consumer,
-# no ONNX/OpenCV dependency; consumes the /perception/depth published above)
-ros2 run so101_safety depth_safety_monitor --ros-args \
-  -p depth_image_topic:=/perception/depth \
-  -p stop_topic:=/safety/protective_stop \
-  -p debug_image_topic:=/safety/depth_debug_image \
-  -p publish_debug_image:=true -p monitor_hz:=10.0
+  -p output_image_topic:=/camera/depth/visualization \
+  -p stop_topic:=/safety/protective_stop
 
 # T6 — safety gate (intercepts teleop, freezes follower on stop)
 ros2 run so101_safety trajectory_safety_gate --ros-args \

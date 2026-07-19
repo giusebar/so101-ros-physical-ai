@@ -1,38 +1,51 @@
-name: depthanything
+name: ai-vision-ros2
 base: core24
-version: '0.1.0'
+version: '1.0.0-depth'
 summary: SO-101 Depth Anything V2 (Small) depth visualisation (ROS 2 Jazzy)
 description: |
   CPU monocular depth visualisation for the SO-101 arm. Subscribes to a ROS 2
   image topic, runs Depth Anything V2 (Small) with ONNX Runtime, and republishes
-  both a colorised relative-depth image (for viewing) and a raw normalised
-  depth map (32FC1, for downstream consumers such as so101_safety).
+  a colorised relative-depth image (for viewing, with the safety ROI/trigger
+  overlaid), a raw normalised depth map (32FC1, for other machine consumers),
+  and a std_msgs/Bool protective-stop signal computed directly by this node
+  (ROI proximity + hysteresis debounce).
 
-  The model weights are NOT bundled in this snap. They are provided by the
-  separate `depthanything-model` content snap and mounted read-only at
-  $SNAP/models via the content interface. `depthanything-model` is installed
-  automatically as the default provider:
+  This is the "ai-vision-ros2" snap's DEPTH variant, published on the
+  latest/stable channel. The model weights are bundled directly in this snap
+  (fetched from Hugging Face at build time) -- no content interface, no
+  separate model snap, no manual `snap connect` step required.
 
-      snap install depthanything
+  The SAME snap name also has a completely different PERSON-DETECTION variant
+  (YOLOv8n, so101_yolo_demo) published on latest/edge -- swap between them
+  live with:
+
+      snap refresh ai-vision-ros2 --channel=edge     # -> person detection
+      snap refresh ai-vision-ros2 --channel=stable    # -> back to depth
 
   Runs as an always-on daemon (like `usb-cam`). Configure it with `snap set`
   instead of launch arguments, e.g.:
 
-      snap set depthanything input-image-topic:=/my/camera/image_raw
-      snap set depthanything output-image-topic:=/camera/depth/visualization
-      snap set depthanything output-depth-topic:=/perception/depth
-      snap set depthanything min-period-s=0.1
+      snap set ai-vision-ros2 input-image-topic=/my/camera/image_raw
+      snap set ai-vision-ros2 output-image-topic=/camera/depth/visualization
+      snap set ai-vision-ros2 output-depth-topic=/perception/depth
+      snap set ai-vision-ros2 min-period-s=0.1
 
   Other options: model-input-size, publish-width, publish-height,
-  intra-op-threads, namespace, node-name, ros-domain-id, rmw-implementation.
+  intra-op-threads, namespace, node-name, ros-domain-id, rmw-implementation,
+  stop-topic, roi, near-threshold, near-margin, min-area-ratio,
+  frames-to-block, frames-to-clear (protective-stop trigger tuning).
 
-  Check status with `snap services depthanything` / `snap logs depthanything`.
+  Check status with `snap services ai-vision-ros2` / `snap logs ai-vision-ros2`.
 
 grade: stable
 confinement: strict
 
 apps:
-  depthanything:
+  # Shared app/service name with the detection variant (so101_yolo_demo's
+  # snapcraft.yaml) so `snap services ai-vision-ros2` / the systemd unit stay
+  # identically named across a `snap refresh --channel=...` swap, even though
+  # the two variants are completely different ROS packages under the hood.
+  perception:
     extensions: [ros2-jazzy]
     command: usr/bin/depthanything-launch
     daemon: simple
@@ -46,27 +59,29 @@ apps:
 hooks:
   configure: {}
 
-plugs:
-  # Mounts the ONNX weights from the depthanything-model snap under
-  # $SNAP/models. default-provider makes `snap install depthanything` also
-  # install the model snap and auto-connect this content interface.
-  depthanything-model:
-    interface: content
-    content: depthanything-model
-    target: $SNAP/models
-    #default-provider: depthanything-model
-
 parts:
   depth-demo:
     plugin: colcon
+    # snapcraft.yaml lives at so101_depth_demo/snap/snapcraft.yaml, so the
+    # project root IS the so101_depth_demo package directory -- "." is just
+    # this one ROS package, so colcon/rosdep never sees unrelated sibling
+    # packages (e.g. so101_description) in the wider monorepo.
     source: .
     stage-packages:
       - libgomp1
-      # used by opencv-python-headless at runtime for linear-algebra ops.
+      # opencv-python-headless (cv2) dlopen()s liblapack.so.3/libblas.so.3 at
+      # runtime for linear-algebra ops. The debs install those under
+      # usr/lib/<triplet>/lapack|blas/, which isn't on the default library
+      # search path -- staged here and exposed via LD_LIBRARY_PATH in
+      # snap/local/depthanything-launch (same fix as the usb-cam snap's
+      # cv_bridge dependency).
       - liblapack3
       - libblas3
     build-packages:
       - python3-pip
+    # colcon builds the ROS package; then install the pure-Python inference
+    # dependencies (not available as rosdeps) into the Debian dist-packages
+    # path so they are on the default Python import path inside the snap.
     override-build: |
       craftctl default
       pip3 install \
@@ -76,6 +91,28 @@ parts:
         "onnxruntime" \
         "numpy" \
         "opencv-python-headless"
+
+  # Model weights bundled directly into this snap
+  model:
+    plugin: nil
+    build-packages:
+      - curl
+      - ca-certificates
+    override-build: |
+      set -eux
+      mkdir -p "${CRAFT_PART_INSTALL}/models"
+      model="${CRAFT_PART_INSTALL}/models/depth_anything_v2_small.onnx"
+      curl -fL --retry 5 --retry-delay 2 \
+        "https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/main/onnx/model.onnx?download=true" \
+        -o "${model}"
+      # Fail early if the download produced an empty file or an HTML error
+      # page (the model is tens of MB; a redirect/error page would be a few
+      # KB and start with '<').
+      test -s "${model}"
+      size=$(stat -c%s "${model}")
+      test "${size}" -gt 1000000 || { echo "Model too small (${size} bytes)" >&2; exit 1; }
+      first=$(head -c 1 "${model}")
+      test "${first}" != "<" || { echo "Downloaded an HTML error page, not the model" >&2; exit 1; }
 
   launcher:
     plugin: dump

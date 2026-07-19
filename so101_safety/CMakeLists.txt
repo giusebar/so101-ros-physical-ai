@@ -10,7 +10,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
-find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -18,7 +17,13 @@ find_package(trajectory_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 
 # Enforcement nodes (moved here from so101_teleop -- both consume/produce
-# only the shared /safety/protective_stop contract, no teleop-specific deps).
+# only the shared /safety/protective_stop contract, no perception-specific
+# deps). so101_safety is now enforcement-only: for the ai-vision-ros2 single
+# snap demo, the perception-driven trigger logic (ROI/thresholds/hysteresis)
+# lives directly in each AI snap's own node (so101_depth_demo's
+# depth_anything_node, so101_yolo_demo's yolo_detect_node), which each
+# publish /safety/protective_stop directly -- so this package no longer
+# needs any Python / ML/vision dependencies at all.
 add_executable(trajectory_safety_gate src/trajectory_safety_gate.cpp)
 ament_target_dependencies(trajectory_safety_gate
   rclcpp
@@ -35,17 +40,6 @@ ament_target_dependencies(safety_pause_bridge
 install(TARGETS
   trajectory_safety_gate
   safety_pause_bridge
-  DESTINATION lib/${PROJECT_NAME}
-)
-
-# Perception-driven trigger node (Python, pure topic consumer -- no ML/vision
-# deps). ament_cmake_python installs the so101_safety/ Python package; the
-# scripts/ entry point is installed as the console executable.
-ament_python_install_package(${PROJECT_NAME})
-
-install(PROGRAMS
-  scripts/depth_safety_monitor
-  scripts/person_safety_monitor
   DESTINATION lib/${PROJECT_NAME}
 )
 

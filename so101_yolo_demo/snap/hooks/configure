@@ -1,16 +1,18 @@
 #!/bin/bash
 # snap/hooks/configure
 #
-# Applies `snap set yolodetect <key>=<value>` configuration:
+# Applies `snap set ai-vision-ros2 <key>=<value>` configuration (detection
+# variant, so101_yolo_demo):
 #   1. fills in defaults (matching so101_yolo_demo/launch/yolo_demo.launch.py)
 #   2. renders $SNAP_DATA/params.yaml (ros__parameters block for
 #      yolo_detect_node) — model_path is NOT user-settable, it always points
-#      at the weights mounted by the yolodetect-model content snap
+#      at the weights bundled directly in this snap (no content interface:
+#      see snap/snapcraft.yaml's "model" part)
 #   3. renders $SNAP_DATA/runtime.env (namespace/node-name/DDS overrides for
 #      the launcher, which are not yolo_detect_node ROS parameters)
-#   4. gates startup on the model file actually being present (the content
-#      interface may not be connected yet, e.g. right after a --dangerous
-#      local install) and enables + (re)starts the daemon once it is
+#   4. (re)starts the daemon -- the model is always present (vendored +
+#      bundled at build time), so there's no "wait for content interface"
+#      gating here unlike the old yolodetect/yolodetect-model split
 #
 # See snap/local/yolodetect-launch for the consumer side.
 set -e
@@ -28,7 +30,7 @@ get_number() {
   val="$(get "$1" "$2")"
   case "$val" in
     ''|*[!0-9.-]*)
-      echo "yolodetect: invalid number for $1: '$val'" >&2
+      echo "ai-vision-ros2 (detection): invalid number for $1: '$val'" >&2
       exit 1
       ;;
   esac
@@ -44,7 +46,25 @@ INPUT_SIZE="$(get_number input-size 640)"
 CONF_THRESHOLD="$(get_number conf-threshold 0.4)"
 CLASS_FILTER="$(get class-filter person)"
 MIN_PERIOD_S="$(get_number min-period-s 0.0)"
-INTRA_OP_THREADS="$(get_number intra-op-threads 0)"
+# NOTE: default is intentionally non-zero (unlike the plain-launch default of
+# 0 = "let ONNX Runtime decide"). Leaving this at 0 makes ORT auto-detect the
+# thread count as the number of CPU cores AND try to pthread_setaffinity_np()
+# each worker thread to a specific core -- strict confinement's seccomp
+# profile denies that syscall, so on a many-core host this floods the log
+# with (harmless but alarming, and very noisy) "pthread_setaffinity_np
+# failed ... Operation not permitted" errors, one per thread. Passing an
+# explicit thread count skips ORT's auto-affinity-pinning path entirely.
+INTRA_OP_THREADS="$(get_number intra-op-threads 4)"
+
+# Protective-stop trigger logic (ROI overlap + hysteresis debounce over the
+# already class/confidence-filtered detections), computed directly by
+# yolo_detect_node itself and published straight to stop-topic -- see
+# so101_yolo_demo/so101_yolo_demo/yolo_detect_node.py.
+STOP_TOPIC="$(get stop-topic /safety/protective_stop)"
+ROI="$(get roi "0.25,0.2,0.75,0.85")"
+MIN_OVERLAP_RATIO="$(get_number min-overlap-ratio 0.2)"
+FRAMES_TO_BLOCK="$(get_number frames-to-block 2)"
+FRAMES_TO_CLEAR="$(get_number frames-to-clear 3)"
 
 NAMESPACE="$(get namespace "")"
 NODE_NAME="$(get node-name "")"
@@ -65,6 +85,11 @@ mkdir -p "$SNAP_DATA"
   echo "    class_filter: \"$CLASS_FILTER\""
   echo "    min_period_s: $MIN_PERIOD_S"
   echo "    intra_op_threads: $INTRA_OP_THREADS"
+  echo "    stop_topic: \"$STOP_TOPIC\""
+  echo "    roi: \"$ROI\""
+  echo "    min_overlap_ratio: $MIN_OVERLAP_RATIO"
+  echo "    frames_to_block: $FRAMES_TO_BLOCK"
+  echo "    frames_to_clear: $FRAMES_TO_CLEAR"
 } > "$SNAP_DATA/params.yaml"
 
 {
@@ -75,11 +100,7 @@ mkdir -p "$SNAP_DATA"
   true
 } > "$SNAP_DATA/runtime.env"
 
-if [ -f "$MODEL_PATH" ]; then
-  snapctl set-health okay
-  snapctl start --enable "$SNAP_NAME.yolodetect" || true
-  snapctl restart "$SNAP_NAME.yolodetect" || true
-else
-  snapctl set-health blocked \
-    "model not found at $MODEL_PATH -- connect the content interface: snap connect $SNAP_NAME:yolodetect-model yolodetect-model:yolodetect-model"
-fi
+snapctl set-health okay
+snapctl start --enable "$SNAP_NAME.perception" || true
+snapctl restart "$SNAP_NAME.perception" || true
+

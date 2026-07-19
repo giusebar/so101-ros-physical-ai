@@ -35,11 +35,25 @@ original snap-twin display expects.
 |---|---|---|
 | `model_path` | `~/models/depth_anything_v2_small.onnx` | ONNX model file. |
 | `input_image_topic` | `/follower/image_raw` | Wrist camera topic in this repo. |
-| `output_image_topic` | `/camera/depth/visualization` | Colorised depth output. |
+| `output_image_topic` | `/camera/depth/visualization` | Colorised depth output (with the safety ROI/trigger overlay). |
+| `output_depth_topic` | `/perception/depth` | Raw normalised depth (32FC1) for other machine consumers. |
 | `model_input_size` | `518` | Square model input. |
 | `publish_width` / `publish_height` | `518` | Output image size. |
 | `min_period_s` | `0.0` | Min seconds between inferences (CPU throttle). |
 | `intra_op_threads` | `0` | ONNX Runtime threads (0 = library default). |
+| `stop_topic` | `/safety/protective_stop` | `std_msgs/Bool` protective-stop output, computed directly by this node. |
+| `roi` | `0.25,0.2,0.75,0.85` | Normalised `x1,y1,x2,y2` center ROI. |
+| `near_threshold` | `0.6` | Normalised depth `[0,1]` above which a pixel is near. |
+| `near_margin` | `0.15` | Margin added on top of the background reference. |
+| `min_area_ratio` | `0.12` | Fraction of ROI that must be near to trigger. |
+| `frames_to_block` | `2` | Consecutive near frames to assert stop. |
+| `frames_to_clear` | `3` | Consecutive clear frames to release stop. |
+
+This node computes and publishes the protective-stop decision itself (ROI
+proximity + hysteresis debounce) — see
+[`docs/ai_vision_ros2_channel_demo.md`](../docs/ai_vision_ros2_channel_demo.md)
+for why (it enables a live `snap refresh --channel=...` swap with the
+sibling `so101_yolo_demo` package, with zero ROS-side restart).
 
 ---
 
