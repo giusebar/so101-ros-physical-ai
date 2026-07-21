@@ -110,21 +110,6 @@ def generate_launch_description():
     image_topic = LaunchConfiguration("image_topic")
     use_viewer = LaunchConfiguration("use_viewer")
     launch_depth = LaunchConfiguration("launch_depth")
-    # LaunchConfiguration.perform() returns the raw configured string (e.g.
-    # "true"/"false", lowercase) which is NOT valid Python -- PythonExpression
-    # evaluates its concatenated substitutions with eval(), so bare `true`
-    # raises "name 'true' is not defined". Compare as a quoted string instead
-    # (mirrors is_depth_backend/is_detection_backend above), then combine
-    # these boolean PythonExpressions with " and " below -- nested
-    # PythonExpressions are perform()'d to "True"/"False" before the outer
-    # expression is evaluated, so that combination is safe.
-    is_launch_depth = PythonExpression(["'", launch_depth, "' == 'true'"])
-    is_use_viewer = PythonExpression(["'", use_viewer, "' == 'true'"])
-    # NOTE: deliberately NOT named "use_rviz" - leader.launch.py and
-    # follower_split.launch.py both declare a launch argument with that exact
-    # name (each hardcoded to "false" below). ROS 2 launch configurations are
-    # not scoped per IncludeLaunchDescription, so reusing "use_rviz" here would
-    # be silently overwritten to "false".
     use_teleop_rviz = LaunchConfiguration("use_teleop_rviz")
     teleop_start_delay = LaunchConfiguration("teleop_start_delay")
 
@@ -136,16 +121,6 @@ def generate_launch_description():
     bringup_share = get_package_share_directory("so101_bringup")
 
     # --- 1 & 2. Real arms + teleop_split ------------------------------------
-    # Reuses so101_bringup's teleop_split.launch.py (leader + follower_split +
-    # teleop_split), which already knows how to bring up the split controllers
-    # and mirror the leader to the follower. We only override:
-    #  - arm_controller: JointTrajectory controller, so the safety gate can
-    #    freeze the arm with a trajectory hold.
-    #  - gripper_mode: forward_position (the gripper_controller here is a
-    #    plain ForwardCommandController, not a GripperActionController, so
-    #    the default parallel_action mode would silently do nothing).
-    #  - gate_input_topic: routes teleop_split's arm trajectory to the safety
-    #    gate's input instead of straight at the controller.
     teleop_split_bringup = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(bringup_share, "launch", "teleop_split.launch.py")
@@ -212,7 +187,15 @@ def generate_launch_description():
             "output_image_topic": depth_viz_topic,
             "stop_topic": safety_stop_topic,
         }.items(),
-        condition=IfCondition(PythonExpression([is_launch_depth, " and ", is_depth_backend])),
+        condition=IfCondition(
+            PythonExpression([
+                "'",
+                launch_depth,
+                "' == 'true' and '",
+                perception_backend,
+                "' == 'depth'",
+            ])
+        ),
     )
 
     yolo_model = IncludeLaunchDescription(
@@ -227,24 +210,24 @@ def generate_launch_description():
             "output_image_topic": detections_viz_topic,
             "stop_topic": safety_stop_topic,
         }.items(),
-        condition=IfCondition(PythonExpression([is_launch_depth, " and ", is_detection_backend])),
+        condition=IfCondition(
+            PythonExpression([
+                "'",
+                launch_depth,
+                "' == 'true' and '",
+                perception_backend,
+                "' == 'detection'",
+            ])
+        ),
     )
 
     # --- Debug viewer ---------------------------------------------------
-    # rqt_image_view has a live topic-selector dropdown built in, so a
-    # single instance covers both backends -- no relaunch, no
-    # perception_backend coupling needed at all: switch topics in the GUI
-    # (/camera/depth/visualization or /camera/detections/visualization)
-    # whenever you `snap refresh ai-vision-ros2 --channel=...`, matching the
-    # "zero ROS-side restart" swap. Each viz topic is the REAL camera view
-    # (colorised depth / annotated detections) with the safety ROI and
-    # trigger state drawn directly onto it by the perception node itself.
     viewer = Node(
         package="rqt_image_view",
         executable="rqt_image_view",
         name="perception_viewer",
         output="screen",
-        condition=IfCondition(is_use_viewer),
+        condition=IfCondition(use_viewer),
     )
 
     # --- 5. Layout TF + RViz ------------------------------------------------
@@ -268,12 +251,6 @@ def generate_launch_description():
         output="screen",
     )
 
-    # Camera + depth can start immediately. teleop_split (inside
-    # teleop_split_bringup) needs the follower controllers up first, which is
-    # handled internally via its own teleop_delay_s (fed from
-    # teleop_start_delay below). The safety gate can start immediately - it
-    # just caches /follower/joint_states and passes through messages once
-    # teleop_split starts publishing.
     return LaunchDescription(
         [
             DeclareLaunchArgument(

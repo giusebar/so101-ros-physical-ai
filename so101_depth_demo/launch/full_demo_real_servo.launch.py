@@ -111,16 +111,6 @@ def generate_launch_description():
     image_topic = LaunchConfiguration("image_topic")
     use_viewer = LaunchConfiguration("use_viewer")
     launch_depth = LaunchConfiguration("launch_depth")
-    # LaunchConfiguration.perform() returns the raw configured string (e.g.
-    # "true"/"false", lowercase) which is NOT valid Python -- PythonExpression
-    # evaluates its concatenated substitutions with eval(), so bare `true`
-    # raises "name 'true' is not defined". Compare as a quoted string instead
-    # (mirrors is_depth_backend/is_detection_backend above), then combine
-    # these boolean PythonExpressions with " and " below -- nested
-    # PythonExpressions are perform()'d to "True"/"False" before the outer
-    # expression is evaluated, so that combination is safe.
-    is_launch_depth = PythonExpression(["'", launch_depth, "' == 'true'"])
-    is_use_viewer = PythonExpression(["'", use_viewer, "' == 'true'"])
     # NOTE: deliberately NOT named "use_rviz" - leader.launch.py and
     # follower_split.launch.py both declare a launch argument with that exact
     # name (each hardcoded to "false" below so they don't pop their own RViz
@@ -259,7 +249,15 @@ def generate_launch_description():
             "output_image_topic": depth_viz_topic,
             "stop_topic": safety_stop_topic,
         }.items(),
-        condition=IfCondition(PythonExpression([is_launch_depth, " and ", is_depth_backend])),
+        condition=IfCondition(
+            PythonExpression([
+                "'",
+                launch_depth,
+                "' == 'true' and '",
+                perception_backend,
+                "' == 'depth'",
+            ])
+        ),
     )
 
     yolo_model = IncludeLaunchDescription(
@@ -274,7 +272,15 @@ def generate_launch_description():
             "output_image_topic": detections_viz_topic,
             "stop_topic": safety_stop_topic,
         }.items(),
-        condition=IfCondition(PythonExpression([is_launch_depth, " and ", is_detection_backend])),
+        condition=IfCondition(
+            PythonExpression([
+                "'",
+                launch_depth,
+                "' == 'true' and '",
+                perception_backend,
+                "' == 'detection'",
+            ])
+        ),
     )
 
     # --- Debug viewer -----------------------------------------------
@@ -291,7 +297,7 @@ def generate_launch_description():
         executable="rqt_image_view",
         name="perception_viewer",
         output="screen",
-        condition=IfCondition(is_use_viewer),
+        condition=IfCondition(use_viewer),
     )
 
     # --- 5. Layout TF + RViz ------------------------------------------------
