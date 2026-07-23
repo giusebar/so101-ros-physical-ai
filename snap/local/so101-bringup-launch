@@ -1,0 +1,40 @@
+#!/bin/bash
+# snap/local/so101-bringup-launch
+#
+# Entry point for the `hardware` daemon app. Reads the runtime.env file
+# rendered by the configure hook (snap/hooks/configure) and launches the
+# so101_bringup hardware_bringup.launch.py file with matching arguments.
+#
+# This script runs inside the ros2-jazzy-ros-base extension's command-chain,
+# so the ROS 2 underlay (this snap's own install) + the content-shared
+# ros-jazzy-ros-base workspace are already sourced (AMENT_PREFIX_PATH,
+# PYTHONPATH, LD_LIBRARY_PATH, ...).
+set -eu
+
+RUNTIME_ENV="$SNAP_DATA/runtime.env"
+
+if [ -f "$RUNTIME_ENV" ]; then
+  # shellcheck disable=SC1090
+  . "$RUNTIME_ENV"
+fi
+
+: "${LEADER_USB_PORT:=/dev/so101_leader}"
+: "${FOLLOWER_USB_PORT:=/dev/so101_follower}"
+: "${HARDWARE_TYPE:=real}"
+: "${ARM_CONTROLLER_NAME:=arm_trajectory_controller}"
+
+if [ -n "${ROS_DOMAIN_ID:-}" ]; then
+  export ROS_DOMAIN_ID
+fi
+if [ -n "${RMW_IMPLEMENTATION:-}" ]; then
+  export RMW_IMPLEMENTATION
+fi
+
+echo "so101-bringup: hardware_type=$HARDWARE_TYPE leader_usb_port=$LEADER_USB_PORT follower_usb_port=$FOLLOWER_USB_PORT arm_controller=$ARM_CONTROLLER_NAME" >&2
+
+exec ros2 launch so101_bringup hardware_bringup.launch.py \
+  hardware_type:="$HARDWARE_TYPE" \
+  leader_usb_port:="$LEADER_USB_PORT" \
+  follower_usb_port:="$FOLLOWER_USB_PORT" \
+  arm_controller:="$ARM_CONTROLLER_NAME" \
+  use_rviz:=false

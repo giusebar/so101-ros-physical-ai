@@ -15,6 +15,9 @@
 
   <depend>so101_description</depend>
 
+  <!-- ros2_control hardware_interface plugin used when hardware_type:=real -->
+  <exec_depend>feetech_ros2_driver</exec_depend>
+
   <!-- cameras.launch.py spawns nodes from these packages -->
   <exec_depend>usb_cam</exec_depend>
   <exec_depend>realsense2_camera</exec_depend>

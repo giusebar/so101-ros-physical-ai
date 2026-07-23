@@ -1,0 +1,117 @@
+name: so101-bringup
+base: core24
+version: '0.1.0'
+summary: SO-101 leader/follower hardware bringup (ROS 2 Jazzy)
+description: |
+  Brings up the physical SO-101 leader and follower arms: robot_state_publisher
+  + ros2_control (Feetech STS3215 hardware interface) for each arm, controller
+  spawners (joint_state_broadcaster, gripper_controller, and either
+  arm_forward_controller or arm_trajectory_controller for the follower -- the
+  leader is state-only, no command interfaces), and a static TF layout placing
+  both arms side-by-side in the 'world' frame.
+
+  This publishes everything an externally-run `rviz2` needs to visualize both
+  arms live: /leader/robot_description, /follower/robot_description, TF, and
+  joint_states. It does NOT include teleoperation (separate snap), RViz itself,
+  or cameras.
+
+  Configure via `snap set`:
+
+      snap set so101-bringup leader-usb-port=/dev/so101_leader
+      snap set so101-bringup follower-usb-port=/dev/so101_follower
+      snap set so101-bringup hardware-type=real       # real | mock
+      snap set so101-bringup arm-controller=trajectory # trajectory | forward
+      snap set so101-bringup ros-domain-id=0
+      snap set so101-bringup rmw-implementation=rmw_fastrtps_cpp
+
+  Requires raw USB access to the Feetech serial adapters (character device
+  permissions still come from the host's udev rule, e.g.
+  so101_bringup/udev/99-so101-serial.rules -- raw-usb only extends snapd's own
+  sandbox, see https://snapcraft.io/docs/reference/interfaces/raw-usb-interface):
+
+      snap connect so101-bringup:raw-usb
+
+  Check status with `snap services so101-bringup` / `snap logs so101-bringup`.
+
+grade: stable
+confinement: strict
+
+platforms:
+  amd64:
+  arm64:
+
+package-repositories:
+  - type: apt
+    url: http://packages.ros.org/ros2/ubuntu
+    suites: [noble]
+    components: [main]
+    key-id: C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
+    key-server: keyserver.ubuntu.com
+
+plugs:
+  shared-memory:
+    private: true
+
+apps:
+  hardware:
+    extensions: [ros2-jazzy-ros-base]
+    command: usr/bin/so101-bringup-launch
+    daemon: simple
+    install-mode: disable
+    restart-condition: on-failure
+    restart-delay: 5s
+    plugs:
+      - raw-usb
+      - network
+      - network-bind
+      - shared-memory
+
+hooks:
+  configure: {}
+
+parts:
+  bringup:
+    plugin: colcon
+    # snapcraft.yaml lives at the monorepo root (snap/snapcraft.yaml), so
+    # source: . is the whole repo -- colcon can see the sibling packages this
+    # depends on (so101_description, feetech_ros2_driver). colcon-packages
+    # restricts the actual build to just these three, so unrelated siblings
+    # (so101_teleop, so101_safety, so101_moveit_config, so101_depth_demo,
+    # so101_yolo_demo, ...) are never built.
+    #
+    # NOTE: this must live at the repo root (not nested under
+    # so101_bringup/snap/) because snapcraft's build instance only mounts the
+    # directory containing snap/snapcraft.yaml -- a relative source like
+    # ../../so101_description would escape that mount entirely and try to
+    # walk the build instance's own root filesystem instead of the host repo.
+    source: .
+    # The snapcraft ROS colcon plugin runs `rosdep install --from-paths` over
+    # the ENTIRE part source tree (not just colcon-packages), so with
+    # source: . that would otherwise crawl every sibling package's
+    # package.xml too (so101_teleop, so101_safety, so101_moveit_config,
+    # so101_depth_demo, so101_yolo_demo, ...) and pull in MoveIt/Gazebo/
+    # camera-stack dependencies none of them are related to this snap.
+    # Prune the copied tree down to just the 3 packages we build before that
+    # scan runs. Everything each of these 3 packages actually needs
+    # (xacro, hardware_interface, controller_manager, joint_state_broadcaster,
+    # joint_trajectory_controller, forward_command_controller,
+    # gripper_controllers, libserial-dev, spdlog, fmt, range-v3, yaml-cpp,
+    # tl_expected, pluginlib, rclcpp, ...) is resolved automatically via
+    # rosdep from their own package.xml -- no manual stage-packages needed.
+    override-pull: |
+      craftctl default
+      find "${CRAFT_PART_SRC}" -mindepth 1 -maxdepth 1 \
+        ! -name so101_bringup \
+        ! -name so101_description \
+        ! -name feetech_ros2_driver \
+        -exec rm -rf {} +
+    colcon-packages:
+      - so101_bringup
+      - so101_description
+      - feetech_ros2_driver
+
+  launcher:
+    plugin: dump
+    source: snap/local
+    organize:
+      so101-bringup-launch: usr/bin/so101-bringup-launch

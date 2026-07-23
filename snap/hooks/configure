@@ -1,0 +1,57 @@
+#!/bin/bash
+# snap/hooks/configure
+#
+# Applies `snap set so101-bringup <key>=<value>` configuration:
+#   1. validates + fills in defaults
+#   2. renders $SNAP_DATA/runtime.env (consumed by snap/local/so101-bringup-launch)
+#   3. (re)starts the daemon
+set -e
+
+get() {
+  # $1 = key, $2 = default
+  val="$(snapctl get "$1")"
+  if [ -z "$val" ]; then
+    val="$2"
+  fi
+  printf '%s' "$val"
+}
+
+LEADER_USB_PORT="$(get leader-usb-port /dev/so101_leader)"
+FOLLOWER_USB_PORT="$(get follower-usb-port /dev/so101_follower)"
+HARDWARE_TYPE="$(get hardware-type real)"          # real | mock
+ARM_CONTROLLER="$(get arm-controller trajectory)"  # trajectory | forward
+ROS_DOMAIN_ID="$(get ros-domain-id "")"
+RMW_IMPLEMENTATION="$(get rmw-implementation "")"
+
+case "$HARDWARE_TYPE" in
+  real|mock) ;;
+  *)
+    echo "so101-bringup: invalid hardware-type '$HARDWARE_TYPE' (expected real|mock)" >&2
+    exit 1
+    ;;
+esac
+
+case "$ARM_CONTROLLER" in
+  trajectory) ARM_CONTROLLER_NAME=arm_trajectory_controller ;;
+  forward) ARM_CONTROLLER_NAME=arm_forward_controller ;;
+  *)
+    echo "so101-bringup: invalid arm-controller '$ARM_CONTROLLER' (expected trajectory|forward)" >&2
+    exit 1
+    ;;
+esac
+
+mkdir -p "$SNAP_DATA"
+
+{
+  echo "LEADER_USB_PORT=\"$LEADER_USB_PORT\""
+  echo "FOLLOWER_USB_PORT=\"$FOLLOWER_USB_PORT\""
+  echo "HARDWARE_TYPE=\"$HARDWARE_TYPE\""
+  echo "ARM_CONTROLLER_NAME=\"$ARM_CONTROLLER_NAME\""
+  [ -n "$ROS_DOMAIN_ID" ] && echo "ROS_DOMAIN_ID=\"$ROS_DOMAIN_ID\""
+  [ -n "$RMW_IMPLEMENTATION" ] && echo "RMW_IMPLEMENTATION=\"$RMW_IMPLEMENTATION\""
+  true
+} > "$SNAP_DATA/runtime.env"
+
+snapctl set-health okay
+snapctl start --enable "$SNAP_NAME.hardware" || true
+snapctl restart "$SNAP_NAME.hardware" || true
