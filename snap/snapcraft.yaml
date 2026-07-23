@@ -48,10 +48,6 @@ package-repositories:
     key-id: C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
     key-server: keyserver.ubuntu.com
 
-plugs:
-  shared-memory:
-    private: true
-
 apps:
   hardware:
     extensions: [ros2-jazzy-ros-base]
@@ -64,7 +60,19 @@ apps:
       - raw-usb
       - network
       - network-bind
-      - shared-memory
+    # NOTE: deliberately NOT plugging shared-memory. FastDDS/FastRTPS prefers
+    # its shared-memory transport for same-host peers; a `private: true`
+    # shared-memory plug isolates this snap's /dev/shm from every OTHER ROS 2
+    # process on the host (unconfined CLI tools, rviz2, other snaps, ...), so
+    # DDS discovery still succeeds (SPDP/SEDP over UDP multicast -- `ros2
+    # topic list`/`topic info` work) but actual data delivery over the writer's
+    # isolated SHM segment silently never reaches external subscribers (`ros2
+    # topic echo`/`hz` hang forever). Confirmed by testing on real hardware in
+    # the workshop container. Without this plug, FastDDS's SHM transport init
+    # is denied by AppArmor and it falls back to UDP-only, which is reachable
+    # by everyone -- matching the working precedent of the other snaps in this
+    # repo (so101_depth_demo, so101_yolo_demo, snap-usb-cam), none of which
+    # plug shared-memory either.
 
 hooks:
   configure: {}
