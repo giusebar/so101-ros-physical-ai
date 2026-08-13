@@ -191,21 +191,12 @@ def generate_launch_description():
             DeclareLaunchArgument("cameras_config_file", default_value=default_cameras_cfg),
             DeclareLaunchArgument("use_camera_tf", default_value="true"),
             DeclareLaunchArgument("use_teleop_rviz", default_value="true"),
-            DeclareLaunchArgument("use_rerun", default_value="false"),
-            DeclareLaunchArgument(
-                "rerun_env_dir",
-                # Best: set env var once, no need to pass each run:
-                # export SO101_RERUN_ENV_DIR=/abs/path/to/tools/rerun_env
-                default_value=EnvironmentVariable("SO101_RERUN_ENV_DIR", default_value=""),
-            ),
-            DeclareLaunchArgument("rerun_delay_s", default_value=teleop_delay_s),
             leader_launch,
             follower_launch,
             layout_tf_launch,
             cameras_launch,
             camera_tf_launch,
             rviz_node,
-            rerun_start,
             teleop_start,
         ]
     )

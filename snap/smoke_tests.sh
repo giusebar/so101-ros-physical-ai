@@ -38,6 +38,26 @@ if command -v ros2 >/dev/null 2>&1; then
     exit 1
   }
   echo "Found expected robot_description/joint_states topics for both arms."
+
+  # NOTE: `topic list`/`topic info` only prove DDS discovery (SPDP/SEDP over
+  # UDP multicast) succeeded -- they do NOT prove actual data reaches an
+  # external (non-snap) subscriber. A `shared-memory: private: true` plug
+  # previously passed this exact check while silently breaking FastDDS's
+  # shared-memory data-plane transport to every other ROS 2 process on the
+  # host (confirmed on real hardware: `topic list` worked, `topic echo`/`hz`
+  # hung forever). So explicitly verify data actually flows here too.
+  echo "=== Verifying data actually flows to an external subscriber (not just discovery) ==="
+  for topic in /leader/joint_states /follower/joint_states; do
+    echo "--- $topic ---"
+    timeout 8 ros2 topic echo "$topic" --once >/tmp/so101-bringup-echo.out 2>&1 || true
+    if [ ! -s /tmp/so101-bringup-echo.out ]; then
+      echo "FAIL: no message received on $topic within 8s -- discovery works but data plane doesn't (check for a private shared-memory plug isolating /dev/shm)" >&2
+      exit 1
+    fi
+    cat /tmp/so101-bringup-echo.out
+  done
+  rm -f /tmp/so101-bringup-echo.out
+  echo "Confirmed real data flow on both arms' joint_states."
 else
   echo "ros2 CLI not on PATH -- skipping ROS graph check (source /opt/ros/jazzy/setup.bash first)"
 fi
