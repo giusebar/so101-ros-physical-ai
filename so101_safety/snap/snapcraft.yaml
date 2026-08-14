@@ -1,0 +1,96 @@
+name: so101-safety
+base: core24
+version: '0.1.0'
+summary: SO-101 protective-stop enforcement (ROS 2 Jazzy)
+description: |
+  Enforces the shared `/safety/protective_stop` (std_msgs/Bool) contract on
+  the follower arm -- perception-agnostic: it doesn't care which node
+  publishes the stop signal (a depth or vision AI backend, a manual e-stop
+  topic, etc.), only that it does. Two mutually-exclusive enforcement
+  strategies, selected with `mode`:
+
+    mode=jtc (default): `trajectory_safety_gate` -- passes JointTrajectory
+      messages through to the follower's trajectory controller while clear,
+      and holds the last commanded pose while stopped. Pairs with the
+      direct/split teleop path (`so101-teleop`'s `arm-mode=joint_trajectory`).
+
+    mode=servo: `safety_pause_bridge` -- calls MoveIt Servo's pause_servo
+      service on the follower to pause/resume. Pairs with the MoveIt Servo
+      teleop path (not yet packaged as a snap).
+
+  Runs as an always-on daemon. Configure via `snap set`:
+
+      snap set so101-safety mode=jtc                      # jtc | servo
+      snap set so101-safety safety-stop-topic=/safety/protective_stop
+
+      # mode=jtc:
+      snap set so101-safety gate-input-topic=/safety/follower/arm_trajectory_in
+      snap set so101-safety gate-output-topic=/follower/arm_trajectory_controller/joint_trajectory
+      snap set so101-safety joint-states-topic=/follower/joint_states
+
+      # mode=servo:
+      snap set so101-safety pause-service=/follower/servo_node/pause_servo
+
+      snap set so101-safety ros-domain-id=0
+      snap set so101-safety rmw-implementation=rmw_fastrtps_cpp
+
+  `so101-teleop` defaults `jtc-topic` straight at the controller. If you
+  also install `so101-safety` in `mode=jtc`, point `so101-teleop` at this
+  snap's `gate-input-topic` instead, or protective stops won't actually
+  hold the arm:
+
+      snap set so101-teleop jtc-topic=/safety/follower/arm_trajectory_in
+
+  This snap has no hardware plugs -- it is a pure DDS topic/service bridge.
+
+  Check status with `snap services so101-safety` / `snap logs so101-safety`.
+
+grade: stable
+confinement: strict
+
+platforms:
+  amd64:
+  arm64:
+
+package-repositories:
+  - type: apt
+    url: http://packages.ros.org/ros2/ubuntu
+    suites: [noble]
+    components: [main]
+    key-id: C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
+    key-server: keyserver.ubuntu.com
+
+apps:
+  safety:
+    extensions: [ros2-jazzy-ros-base]
+    command: usr/bin/safety-launch
+    daemon: simple
+    install-mode: disable
+    restart-condition: on-failure
+    restart-delay: 5s
+    plugs:
+      - network
+      - network-bind
+
+hooks:
+  configure: {}
+
+parts:
+  safety:
+    plugin: colcon
+    # snapcraft.yaml lives at so101_safety/snap/snapcraft.yaml, so the project
+    # root IS the so101_safety package directory -- "." is just this one ROS
+    # package, no monorepo pruning needed (so101_safety has zero package.xml
+    # cross-deps on so101_bringup/so101_teleop/perception packages).
+    source: .
+    colcon-packages:
+      - so101_safety
+
+  launcher:
+    plugin: dump
+    source: snap/local
+    organize:
+      safety-launch: usr/bin/safety-launch
+    override-build: |
+      craftctl default
+      chmod +x "${CRAFT_PART_INSTALL}/safety-launch"

@@ -1,0 +1,109 @@
+#!/bin/bash
+# snap/hooks/configure
+#
+# Applies `snap set so101-safety <key>=<value>`: `mode` selects which of the
+# two enforcement nodes runs (trajectory_safety_gate | safety_pause_bridge).
+# Validates + fills in defaults, renders $SNAP_DATA/params.yaml + runtime.env,
+# (re)starts the daemon. See snap/local/safety-launch for the consumer side.
+set -e
+
+get() {
+  # $1 = key, $2 = default
+  val="$(snapctl get "$1")"
+  if [ -z "$val" ]; then
+    val="$2"
+  fi
+  printf '%s' "$val"
+}
+
+get_number() {
+  val="$(get "$1" "$2")"
+  case "$val" in
+    ''|*[!0-9.-]*)
+      echo "so101-safety: invalid number for $1: '$val'" >&2
+      exit 1
+      ;;
+  esac
+  printf '%s' "$val"
+}
+
+MODE="$(get mode jtc)"  # jtc | servo
+
+case "$MODE" in
+  jtc|servo) ;;
+  *)
+    echo "so101-safety: invalid mode '$MODE' (expected jtc|servo)" >&2
+    exit 1
+    ;;
+esac
+
+SAFETY_STOP_TOPIC="$(get safety-stop-topic /safety/protective_stop)"
+NAMESPACE="$(get namespace "")"
+NODE_NAME="$(get node-name "")"
+ROS_DOMAIN_ID="$(get ros-domain-id "")"
+RMW_IMPLEMENTATION="$(get rmw-implementation "")"
+
+mkdir -p "$SNAP_DATA"
+
+if [ "$MODE" = "jtc" ]; then
+  GATE_INPUT_TOPIC="$(get gate-input-topic /safety/follower/arm_trajectory_in)"
+  GATE_OUTPUT_TOPIC="$(get gate-output-topic /follower/arm_trajectory_controller/joint_trajectory)"
+  JOINT_STATES_TOPIC="$(get joint-states-topic /follower/joint_states)"
+  HOLD_DURATION_S="$(get_number hold-duration-s 0.2)"
+  ARM_JOINTS_CSV="$(get arm-joints "shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll")"
+
+  arm_joints_yaml=""
+  old_ifs="$IFS"
+  IFS=','
+  for joint in $ARM_JOINTS_CSV; do
+    arm_joints_yaml="${arm_joints_yaml}      - \"${joint}\"
+"
+  done
+  IFS="$old_ifs"
+
+  {
+    echo "/**:"
+    echo "  ros__parameters:"
+    echo "    input_topic: \"$GATE_INPUT_TOPIC\""
+    echo "    output_topic: \"$GATE_OUTPUT_TOPIC\""
+    echo "    safety_stop_topic: \"$SAFETY_STOP_TOPIC\""
+    echo "    joint_states_topic: \"$JOINT_STATES_TOPIC\""
+    echo "    hold_duration_s: $HOLD_DURATION_S"
+    echo "    arm_joints:"
+    printf '%s' "$arm_joints_yaml"
+  } > "$SNAP_DATA/params.yaml"
+else
+  PAUSE_SERVICE="$(get pause-service /follower/servo_node/pause_servo)"
+  RESUME_ON_START="$(get resume-on-start true)"
+  RECONCILE_PERIOD_S="$(get_number reconcile-period-s 0.5)"
+
+  case "$RESUME_ON_START" in
+    true|false) ;;
+    *)
+      echo "so101-safety: invalid resume-on-start '$RESUME_ON_START' (expected true|false)" >&2
+      exit 1
+      ;;
+  esac
+
+  {
+    echo "/**:"
+    echo "  ros__parameters:"
+    echo "    safety_stop_topic: \"$SAFETY_STOP_TOPIC\""
+    echo "    pause_service: \"$PAUSE_SERVICE\""
+    echo "    resume_on_start: $RESUME_ON_START"
+    echo "    reconcile_period_s: $RECONCILE_PERIOD_S"
+  } > "$SNAP_DATA/params.yaml"
+fi
+
+{
+  echo "MODE=\"$MODE\""
+  [ -n "$NAMESPACE" ] && echo "NAMESPACE=\"$NAMESPACE\""
+  [ -n "$NODE_NAME" ] && echo "NODE_NAME=\"$NODE_NAME\""
+  [ -n "$ROS_DOMAIN_ID" ] && echo "ROS_DOMAIN_ID=\"$ROS_DOMAIN_ID\""
+  [ -n "$RMW_IMPLEMENTATION" ] && echo "RMW_IMPLEMENTATION=\"$RMW_IMPLEMENTATION\""
+  true
+} > "$SNAP_DATA/runtime.env"
+
+snapctl set-health okay
+snapctl start --enable "$SNAP_NAME.safety" || true
+snapctl restart "$SNAP_NAME.safety" || true

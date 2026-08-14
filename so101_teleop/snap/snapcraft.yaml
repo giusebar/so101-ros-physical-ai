@@ -1,0 +1,85 @@
+name: so101-teleop
+base: core24
+version: '0.1.0'
+summary: SO-101 leader->follower direct teleop bridge (ROS 2 Jazzy)
+description: |
+  Mirrors the SO-101 leader arm's joint_states onto the follower's controller
+  topics -- no MoveIt Servo, no IK, no safety envelope of its own (that's
+  `so101-safety`'s job). Packages the `teleop_split` node from `so101_teleop`.
+
+  Runs as an always-on daemon. Configure via `snap set`:
+
+      snap set so101-teleop arm-mode=joint_trajectory     # joint_trajectory | forward_position
+      snap set so101-teleop gripper-mode=forward_position # forward_position only
+      snap set so101-teleop leader-topic=/leader/joint_states
+      snap set so101-teleop jtc-topic=/follower/arm_trajectory_controller/joint_trajectory
+      snap set so101-teleop fwd-topic=/follower/arm_forward_controller/commands
+      snap set so101-teleop gripper-fwd-topic=/follower/gripper_controller/commands
+      snap set so101-teleop gripper-action=/follower/gripper_controller/gripper_cmd
+      snap set so101-teleop ros-domain-id=0
+      snap set so101-teleop rmw-implementation=rmw_fastrtps_cpp
+
+  Defaults match `so101-bringup`'s namespaces/controllers, so `snap install
+  so101-bringup so101-teleop` works with no configuration. `gripper-mode`
+  only accepts `forward_position` -- the follower's `gripper_controller` is
+  a `ForwardCommandController`, not a `GripperActionController`.
+
+  If `so101-safety` is also installed (`mode=jtc`), route the trajectory
+  through its gate instead of straight at the controller, or protective
+  stops won't actually hold the arm:
+
+      snap set so101-teleop jtc-topic=/safety/follower/arm_trajectory_in
+
+  This snap has no hardware plugs -- it is a pure DDS topic bridge.
+
+  Check status with `snap services so101-teleop` / `snap logs so101-teleop`.
+
+grade: stable
+confinement: strict
+
+platforms:
+  amd64:
+  arm64:
+
+package-repositories:
+  - type: apt
+    url: http://packages.ros.org/ros2/ubuntu
+    suites: [noble]
+    components: [main]
+    key-id: C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
+    key-server: keyserver.ubuntu.com
+
+apps:
+  teleop:
+    extensions: [ros2-jazzy-ros-base]
+    command: usr/bin/teleop-split-launch
+    daemon: simple
+    install-mode: disable
+    restart-condition: on-failure
+    restart-delay: 5s
+    plugs:
+      - network
+      - network-bind
+
+hooks:
+  configure: {}
+
+parts:
+  teleop:
+    plugin: colcon
+    # snapcraft.yaml lives at so101_teleop/snap/snapcraft.yaml, so the project
+    # root IS the so101_teleop package directory -- "." is just this one ROS
+    # package, no monorepo pruning needed (so101_teleop has zero package.xml
+    # cross-deps on so101_bringup/so101_description/so101_safety).
+    source: .
+    colcon-packages:
+      - so101_teleop
+
+  launcher:
+    plugin: dump
+    source: snap/local
+    organize:
+      teleop-split-launch: usr/bin/teleop-split-launch
+    override-build: |
+      craftctl default
+      chmod +x "${CRAFT_PART_INSTALL}/teleop-split-launch"

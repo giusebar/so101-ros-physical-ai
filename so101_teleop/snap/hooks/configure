@@ -1,0 +1,119 @@
+#!/bin/bash
+# snap/hooks/configure
+#
+# Applies `snap set so101-teleop <key>=<value>`: validates + fills in
+# defaults, renders $SNAP_DATA/params.yaml + runtime.env, (re)starts the
+# daemon. See snap/local/teleop-split-launch for the consumer side.
+set -e
+
+get() {
+  # $1 = key, $2 = default
+  val="$(snapctl get "$1")"
+  if [ -z "$val" ]; then
+    val="$2"
+  fi
+  printf '%s' "$val"
+}
+
+get_number() {
+  val="$(get "$1" "$2")"
+  case "$val" in
+    ''|*[!0-9.-]*)
+      echo "so101-teleop: invalid number for $1: '$val'" >&2
+      exit 1
+      ;;
+  esac
+  printf '%s' "$val"
+}
+
+ARM_MODE="$(get arm-mode joint_trajectory)"           # joint_trajectory | forward_position
+# forward_position only: gripper_controller here is a ForwardCommandController,
+# not a GripperActionController, so parallel_action has no server to talk to.
+GRIPPER_MODE="$(get gripper-mode forward_position)"   # forward_position only
+
+case "$ARM_MODE" in
+  joint_trajectory|forward_position) ;;
+  *)
+    echo "so101-teleop: invalid arm-mode '$ARM_MODE' (expected joint_trajectory|forward_position)" >&2
+    exit 1
+    ;;
+esac
+
+case "$GRIPPER_MODE" in
+  forward_position) ;;
+  *)
+    echo "so101-teleop: invalid gripper-mode '$GRIPPER_MODE' (only forward_position is supported)" >&2
+    exit 1
+    ;;
+esac
+
+# Defaults match so101-bringup's namespaces/controllers so the two snaps
+# work together out of the box. jtc-topic points straight at the controller
+# by default (solo install works standalone); if so101-safety is also
+# installed in mode=jtc, set jtc-topic=/safety/follower/arm_trajectory_in
+# to route through the gate, or protective stops won't actually hold the arm.
+LEADER_TOPIC="$(get leader-topic /leader/joint_states)"
+JTC_TOPIC="$(get jtc-topic /follower/arm_trajectory_controller/joint_trajectory)"
+FWD_TOPIC="$(get fwd-topic /follower/arm_forward_controller/commands)"
+GRIPPER_FWD_TOPIC="$(get gripper-fwd-topic /follower/gripper_controller/commands)"
+GRIPPER_ACTION="$(get gripper-action /follower/gripper_controller/gripper_cmd)"
+
+# 100 Hz / 0.01s matches the known-good plain-launch config (teleop_split.yaml);
+# the node's own hardcoded defaults (50 Hz / 0.08s) are noticeably slower.
+PUBLISH_RATE_HZ="$(get_number publish-rate-hz 100.0)"
+STALE_TIMEOUT_S="$(get_number stale-timeout-s 0.25)"
+POINT_DT_S="$(get_number point-dt-s 0.01)"
+GRIPPER_DEADBAND="$(get_number gripper-deadband 0.005)"
+GRIPPER_MIN_INTERVAL_S="$(get_number gripper-min-interval-s 0.05)"
+
+ARM_JOINTS_CSV="$(get arm-joints "shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll")"
+GRIPPER_JOINT="$(get gripper-joint gripper)"
+
+NAMESPACE="$(get namespace "")"
+NODE_NAME="$(get node-name "")"
+ROS_DOMAIN_ID="$(get ros-domain-id "")"
+RMW_IMPLEMENTATION="$(get rmw-implementation "")"
+
+mkdir -p "$SNAP_DATA"
+
+# Render arm_joints as a YAML list.
+arm_joints_yaml=""
+old_ifs="$IFS"
+IFS=','
+for joint in $ARM_JOINTS_CSV; do
+  arm_joints_yaml="${arm_joints_yaml}      - \"${joint}\"
+"
+done
+IFS="$old_ifs"
+
+{
+  echo "/**:"
+  echo "  ros__parameters:"
+  echo "    arm_mode: \"$ARM_MODE\""
+  echo "    leader_topic: \"$LEADER_TOPIC\""
+  echo "    jtc_topic: \"$JTC_TOPIC\""
+  echo "    fwd_topic: \"$FWD_TOPIC\""
+  echo "    gripper_mode: \"$GRIPPER_MODE\""
+  echo "    gripper_fwd_topic: \"$GRIPPER_FWD_TOPIC\""
+  echo "    gripper_action: \"$GRIPPER_ACTION\""
+  echo "    publish_rate_hz: $PUBLISH_RATE_HZ"
+  echo "    stale_timeout_s: $STALE_TIMEOUT_S"
+  echo "    point_dt_s: $POINT_DT_S"
+  echo "    gripper_deadband: $GRIPPER_DEADBAND"
+  echo "    gripper_min_interval_s: $GRIPPER_MIN_INTERVAL_S"
+  echo "    arm_joints:"
+  printf '%s' "$arm_joints_yaml"
+  echo "    gripper_joint: \"$GRIPPER_JOINT\""
+} > "$SNAP_DATA/params.yaml"
+
+{
+  [ -n "$NAMESPACE" ] && echo "NAMESPACE=\"$NAMESPACE\""
+  [ -n "$NODE_NAME" ] && echo "NODE_NAME=\"$NODE_NAME\""
+  [ -n "$ROS_DOMAIN_ID" ] && echo "ROS_DOMAIN_ID=\"$ROS_DOMAIN_ID\""
+  [ -n "$RMW_IMPLEMENTATION" ] && echo "RMW_IMPLEMENTATION=\"$RMW_IMPLEMENTATION\""
+  true
+} > "$SNAP_DATA/runtime.env"
+
+snapctl set-health okay
+snapctl start --enable "$SNAP_NAME.teleop" || true
+snapctl restart "$SNAP_NAME.teleop" || true

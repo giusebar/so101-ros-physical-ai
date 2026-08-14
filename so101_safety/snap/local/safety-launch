@@ -1,0 +1,59 @@
+#!/bin/bash
+# snap/local/safety-launch
+#
+# Entry point for the `safety` daemon app. Reads MODE from runtime.env
+# (rendered by the configure hook, snap/hooks/configure) and execs the
+# matching enforcement node directly (no `ros2 launch` involved -- these are
+# single self-contained nodes, not launch trees):
+#   MODE=jtc    -> trajectory_safety_gate
+#   MODE=servo  -> safety_pause_bridge
+#
+# This script runs inside the ros2-jazzy-ros-base extension's command-chain,
+# so the ROS 2 underlay/overlay environment (AMENT_PREFIX_PATH,
+# LD_LIBRARY_PATH, PYTHONPATH, ...) is already sourced.
+set -eu
+
+PARAMS_FILE="$SNAP_DATA/params.yaml"
+RUNTIME_ENV="$SNAP_DATA/runtime.env"
+
+if [ ! -f "$PARAMS_FILE" ] || [ ! -f "$RUNTIME_ENV" ]; then
+  echo "so101-safety: no configuration found yet at $SNAP_DATA" >&2
+  echo "so101-safety: the configure hook should have created this on install" >&2
+  exit 1
+fi
+
+# shellcheck disable=SC1090
+. "$RUNTIME_ENV"
+
+if [ -n "${ROS_DOMAIN_ID:-}" ]; then
+  export ROS_DOMAIN_ID
+fi
+if [ -n "${RMW_IMPLEMENTATION:-}" ]; then
+  export RMW_IMPLEMENTATION
+fi
+
+case "${MODE:-jtc}" in
+  jtc)
+    NODE_EXE="$SNAP/opt/ros/snap/lib/so101_safety/trajectory_safety_gate"
+    ;;
+  servo)
+    NODE_EXE="$SNAP/opt/ros/snap/lib/so101_safety/safety_pause_bridge"
+    ;;
+  *)
+    echo "so101-safety: invalid MODE '${MODE:-}' in $RUNTIME_ENV (expected jtc|servo)" >&2
+    exit 1
+    ;;
+esac
+
+set -- "$NODE_EXE" --ros-args --params-file "$PARAMS_FILE"
+
+if [ -n "${NODE_NAME:-}" ]; then
+  set -- "$@" -r __node:="$NODE_NAME"
+fi
+
+if [ -n "${NAMESPACE:-}" ]; then
+  set -- "$@" -r __ns:="$NAMESPACE"
+fi
+
+echo "so101-safety: exec: $*" >&2
+exec "$@"
