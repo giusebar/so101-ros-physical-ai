@@ -32,6 +32,15 @@ if [ -n "${RMW_IMPLEMENTATION:-}" ]; then
   export RMW_IMPLEMENTATION
 fi
 
+# Disable Fast DDS shared-memory transport (force UDP-only). SHM can't cross
+# strict-confinement sandboxes, so it fails/drops local traffic between the
+# so101-* snaps. Only meaningful for a Fast DDS RMW; harmless otherwise.
+case "${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}" in
+  rmw_fastrtps_*)
+    export FASTRTPS_DEFAULT_PROFILES_FILE="$SNAP/usr/share/fastdds_no_shared_memory.xml"
+    ;;
+esac
+
 case "${MODE:-jtc}" in
   jtc)
     NODE_EXE="$SNAP/opt/ros/snap/lib/so101_safety/trajectory_safety_gate"

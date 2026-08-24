@@ -1,18 +1,16 @@
 name: so101-teleop
 base: core24
 version: '0.1.0'
-summary: SO-101 leader->follower direct teleop bridge (ROS 2 Jazzy)
+summary: SO-101 leader->follower direct teleop bridge
 description: |
   Mirrors the SO-101 leader arm's joint_states onto the follower's controller
-  topics -- no MoveIt Servo, no IK, no safety envelope of its own (that's
-  `so101-safety`'s job). Packages the `teleop_split` node from `so101_teleop`.
+  topics. Packages the `teleop_split` node from `so101_teleop`.
 
   Runs as an always-on daemon. Configure via `snap set`:
 
       snap set so101-teleop arm-mode=joint_trajectory     # joint_trajectory | forward_position
       snap set so101-teleop gripper-mode=forward_position # forward_position only
       snap set so101-teleop leader-topic=/leader/joint_states
-      snap set so101-teleop jtc-topic=/follower/arm_trajectory_controller/joint_trajectory
       snap set so101-teleop fwd-topic=/follower/arm_forward_controller/commands
       snap set so101-teleop gripper-fwd-topic=/follower/gripper_controller/commands
       snap set so101-teleop gripper-action=/follower/gripper_controller/gripper_cmd
@@ -20,17 +18,20 @@ description: |
       snap set so101-teleop rmw-implementation=rmw_fastrtps_cpp
 
   Defaults match `so101-bringup`'s namespaces/controllers, so `snap install
-  so101-bringup so101-teleop` works with no configuration. `gripper-mode`
-  only accepts `forward_position` -- the follower's `gripper_controller` is
-  a `ForwardCommandController`, not a `GripperActionController`.
+  so101-bringup so101-teleop` works with no configuration.
 
-  If `so101-safety` is also installed (`mode=jtc`), route the trajectory
-  through its gate instead of straight at the controller, or protective
-  stops won't actually hold the arm:
+  Safety routing is automatic: teleop publishes its trajectory stream
+  straight at the follower's controller when `so101-safety` is absent, and
+  reroutes through the safety gate when `so101-safety` is installed -- via
+  the `safety-route` content interface, no `snap set` required. On store
+  installs from the same publisher the interface auto-connects; a
+  `--dangerous` local install needs a one-time manual connect:
 
-      snap set so101-teleop jtc-topic=/safety/follower/arm_trajectory_in
+      snap connect so101-teleop:safety-route so101-safety:safety-route
 
-  This snap has no hardware plugs -- it is a pure DDS topic bridge.
+  To force a specific trajectory topic (escape hatch, overrides auto-routing):
+
+      snap set so101-teleop jtc-topic=/follower/arm_trajectory_controller/joint_trajectory
 
   Check status with `snap services so101-teleop` / `snap logs so101-teleop`.
 
@@ -60,17 +61,26 @@ apps:
     plugs:
       - network
       - network-bind
+      - safety-route
+
+# Content plug pairing with so101-safety's `safety-route` slot. When connected
+# (auto-connects on store installs from the same publisher), the launcher reads
+# $SNAP_DATA/safety-route/route.env and routes the trajectory stream through the
+# safety gate instead of straight at the controller.
+plugs:
+  safety-route:
+    interface: content
+    content: so101-safety-route
+    target: $SNAP_DATA/safety-route
 
 hooks:
   configure: {}
+  connect-plug-safety-route: {}
+  disconnect-plug-safety-route: {}
 
 parts:
   teleop:
     plugin: colcon
-    # snapcraft.yaml lives at so101_teleop/snap/snapcraft.yaml, so the project
-    # root IS the so101_teleop package directory -- "." is just this one ROS
-    # package, no monorepo pruning needed (so101_teleop has zero package.xml
-    # cross-deps on so101_bringup/so101_description/so101_safety).
     source: .
     colcon-packages:
       - so101_teleop
@@ -80,6 +90,10 @@ parts:
     source: snap/local
     organize:
       teleop-split-launch: usr/bin/teleop-split-launch
+      # Fast DDS profile forcing UDP-only (no shared-memory transport), which
+      # SHM can't do across strict-confinement sandboxes. Activated via
+      # FASTRTPS_DEFAULT_PROFILES_FILE in teleop-split-launch.
+      fastdds_no_shared_memory.xml: usr/share/
     override-build: |
       craftctl default
       chmod +x "${CRAFT_PART_INSTALL}/teleop-split-launch"

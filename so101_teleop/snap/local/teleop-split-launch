@@ -3,12 +3,10 @@
 #
 # Entry point for the `teleop` daemon app. Reads the runtime.env and
 # params.yaml rendered by the configure hook (snap/hooks/configure) and execs
-# the teleop_split ROS 2 node directly (no `ros2 launch` involved -- this is
-# a single self-contained node, not a launch tree).
+# the teleop_split ROS 2 node directly.
 #
 # This script runs inside the ros2-jazzy-ros-base extension's command-chain,
-# so the ROS 2 underlay/overlay environment (AMENT_PREFIX_PATH,
-# LD_LIBRARY_PATH, PYTHONPATH, ...) is already sourced.
+# so the ROS 2 underlay/overlay environment is already sourced.
 set -eu
 
 PARAMS_FILE="$SNAP_DATA/params.yaml"
@@ -34,7 +32,49 @@ if [ -n "${RMW_IMPLEMENTATION:-}" ]; then
   export RMW_IMPLEMENTATION
 fi
 
+# Disable Fast DDS shared-memory transport (force UDP-only). SHM can't cross
+# strict-confinement sandboxes, so it fails/drops local traffic between the
+# so101-* snaps. Only meaningful for a Fast DDS RMW; harmless otherwise.
+case "${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}" in
+  rmw_fastrtps_*)
+    export FASTRTPS_DEFAULT_PROFILES_FILE="$SNAP/usr/share/fastdds_no_shared_memory.xml"
+    ;;
+esac
+
 set -- "$TELEOP_SPLIT_EXE" --ros-args --params-file "$PARAMS_FILE"
+
+# Resolve the trajectory output topic (jtc_topic). Precedence:
+#   1. explicit `snap set so101-teleop jtc-topic=...` (JTC_EXPLICIT) -- wins.
+#   2. safety-route content interface connected -> route through the gate,
+#      using the topic so101-safety advertised in route.env (falling back to
+#      the well-known gate input topic if the file isn't there yet).
+#   3. otherwise -> straight at the follower's trajectory controller.
+# The `-p` here overrides the baseline jtc_topic in params.yaml.
+#
+# Connection state comes from $SNAP_DATA/safety-route.state, written by the
+# connect/disconnect-plug hooks.
+STATE_FILE="$SNAP_DATA/safety-route.state"
+ROUTE_STATE=""
+if [ -f "$STATE_FILE" ]; then
+  read -r ROUTE_STATE < "$STATE_FILE" || true
+elif snapctl is-connected safety-route; then
+  ROUTE_STATE="connected"
+fi
+
+if [ -n "${JTC_EXPLICIT:-}" ]; then
+  JTC_TOPIC="$JTC_EXPLICIT"
+elif [ "$ROUTE_STATE" = "connected" ]; then
+  ROUTE_ENV="$SNAP_DATA/safety-route/route.env"
+  if [ -s "$ROUTE_ENV" ]; then
+    # shellcheck disable=SC1090
+    . "$ROUTE_ENV"
+  fi
+  JTC_TOPIC="${SAFETY_JTC_TOPIC:-/safety/follower/arm_trajectory_in}"
+else
+  JTC_TOPIC="/follower/arm_trajectory_controller/joint_trajectory"
+fi
+echo "so101-teleop: jtc_topic resolved to $JTC_TOPIC" >&2
+set -- "$@" -p jtc_topic:="$JTC_TOPIC"
 
 if [ -n "${NODE_NAME:-}" ]; then
   set -- "$@" -r __node:="$NODE_NAME"

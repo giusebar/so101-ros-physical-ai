@@ -56,6 +56,10 @@ PUB_PID=$!
 trap 'kill "$PUB_PID" 2>/dev/null || true' EXIT
 
 echo "=== Verifying teleop_split republishes a JointTrajectory (data plane, not just discovery) ==="
+# so101-safety is not installed here, so the `safety-route` content interface is
+# disconnected and teleop auto-routes STRAIGHT at the controller topic below.
+# (With so101-safety installed + connected it would instead publish to the
+# gate's input topic, /safety/follower/arm_trajectory_in.)
 timeout 8 ros2 topic echo /follower/arm_trajectory_controller/joint_trajectory --once \
   >/tmp/so101-teleop-echo.out 2>&1 || true
 if [ ! -s /tmp/so101-teleop-echo.out ]; then

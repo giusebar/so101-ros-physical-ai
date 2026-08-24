@@ -1,0 +1,20 @@
+#!/bin/bash
+# snap/hooks/disconnect-plug-safety-route
+#
+# Fires when the `safety-route` content interface to so101-safety is
+# disconnected (e.g. so101-safety removed). Record the intent ("disconnected")
+# to a state file and restart the teleop daemon so the launcher
+# (snap/local/teleop-split-launch) re-evaluates its output topic and falls back
+# to publishing straight at the controller.
+#
+# This hook runs *while the interface is still connected* (snapd runs disconnect
+# hooks before committing the disconnection), so `snapctl is-connected` / the
+# content mount would both still report "connected" if the launcher queried them
+# from the restart we trigger here. We therefore record the intent explicitly
+# and have the launcher trust this file instead of live interface state.
+set -e
+
+mkdir -p "$SNAP_DATA"
+echo disconnected > "$SNAP_DATA/safety-route.state"
+
+snapctl restart "$SNAP_NAME.teleop" || true

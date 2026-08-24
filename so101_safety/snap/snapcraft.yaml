@@ -1,12 +1,11 @@
 name: so101-safety
 base: core24
 version: '0.1.0'
-summary: SO-101 protective-stop enforcement (ROS 2 Jazzy)
+summary: SO-101 protective-stop enforcement
 description: |
   Enforces the shared `/safety/protective_stop` (std_msgs/Bool) contract on
-  the follower arm -- perception-agnostic: it doesn't care which node
-  publishes the stop signal (a depth or vision AI backend, a manual e-stop
-  topic, etc.), only that it does. Two mutually-exclusive enforcement
+  the follower arm.
+  Two mutually-exclusive enforcement
   strategies, selected with `mode`:
 
     mode=jtc (default): `trajectory_safety_gate` -- passes JointTrajectory
@@ -34,14 +33,17 @@ description: |
       snap set so101-safety ros-domain-id=0
       snap set so101-safety rmw-implementation=rmw_fastrtps_cpp
 
-  `so101-teleop` defaults `jtc-topic` straight at the controller. If you
-  also install `so101-safety` in `mode=jtc`, point `so101-teleop` at this
-  snap's `gate-input-topic` instead, or protective stops won't actually
-  hold the arm:
+  `so101-teleop` auto-routes through this snap when present: it plugs the
+  `safety-route` content interface this snap provides and, when connected,
+  publishes its trajectory stream to the gate's `gate-input-topic` (read from
+  the interface) instead of straight at the controller. 
+  On store installs from the same publisher the
+  interface auto-connects; a `--dangerous` local install needs a one-time:
 
-      snap set so101-teleop jtc-topic=/safety/follower/arm_trajectory_in
+      snap connect so101-teleop:safety-route so101-safety:safety-route
 
-  This snap has no hardware plugs -- it is a pure DDS topic/service bridge.
+  If you change `gate-input-topic` after so101-teleop is already running,
+  restart it (`snap restart so101-teleop`) so it re-reads the advertised topic.
 
   Check status with `snap services so101-safety` / `snap logs so101-safety`.
 
@@ -72,16 +74,28 @@ apps:
       - network
       - network-bind
 
+# Content slot advertising this snap's presence AND its configured gate input
+# topic to so101-teleop. so101-teleop plugs this and auto-routes its trajectory
+# stream through the gate when connected -- no `snap set` needed. The shared
+# dir carries $SNAP_COMMON/safety-route/route.env (SAFETY_JTC_TOPIC=<gate-input-topic>),
+# written by the configure hook. Same-publisher content interfaces auto-connect
+# on store installs; `--dangerous` installs need a manual `snap connect`.
+slots:
+  safety-route:
+    interface: content
+    content: so101-safety-route
+    read:
+      - $SNAP_COMMON/safety-route
+
 hooks:
+  # install: mkdir the shared slot dir before snapd sets up the content mount
+  # (snapd does not auto-create $SNAP_COMMON content-slot source dirs).
+  install: {}
   configure: {}
 
 parts:
   safety:
     plugin: colcon
-    # snapcraft.yaml lives at so101_safety/snap/snapcraft.yaml, so the project
-    # root IS the so101_safety package directory -- "." is just this one ROS
-    # package, no monorepo pruning needed (so101_safety has zero package.xml
-    # cross-deps on so101_bringup/so101_teleop/perception packages).
     source: .
     colcon-packages:
       - so101_safety
@@ -91,6 +105,10 @@ parts:
     source: snap/local
     organize:
       safety-launch: usr/bin/safety-launch
+      # Fast DDS profile forcing UDP-only (no shared-memory transport), which
+      # SHM can't do across strict-confinement sandboxes. Activated via
+      # FASTRTPS_DEFAULT_PROFILES_FILE in safety-launch.
+      fastdds_no_shared_memory.xml: usr/share/
     override-build: |
       craftctl default
       chmod +x "${CRAFT_PART_INSTALL}/safety-launch"

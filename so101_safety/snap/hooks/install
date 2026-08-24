@@ -1,0 +1,8 @@
+#!/bin/bash
+# snap/hooks/install
+#
+# Creates the content-slot shared directory ($SNAP_COMMON/safety-route) before
+# snapd wires up the `safety-route` content interface to so101-teleop.
+set -e
+
+mkdir -p "$SNAP_COMMON/safety-route"

@@ -44,6 +44,7 @@ ROS_DOMAIN_ID="$(get ros-domain-id "")"
 RMW_IMPLEMENTATION="$(get rmw-implementation "")"
 
 mkdir -p "$SNAP_DATA"
+mkdir -p "$SNAP_COMMON/safety-route"
 
 if [ "$MODE" = "jtc" ]; then
   GATE_INPUT_TOPIC="$(get gate-input-topic /safety/follower/arm_trajectory_in)"
@@ -72,6 +73,12 @@ if [ "$MODE" = "jtc" ]; then
     echo "    arm_joints:"
     printf '%s' "$arm_joints_yaml"
   } > "$SNAP_DATA/params.yaml"
+
+  # Advertise where so101-teleop should publish its trajectory stream: the
+  # gate's INPUT topic, so the gate sits in the middle. so101-teleop reads this
+  # via the `safety-route` content interface and auto-routes to it (see
+  # so101_teleop/snap/local/teleop-split-launch).
+  echo "SAFETY_JTC_TOPIC=\"$GATE_INPUT_TOPIC\"" > "$SNAP_COMMON/safety-route/route.env"
 else
   PAUSE_SERVICE="$(get pause-service /follower/servo_node/pause_servo)"
   RESUME_ON_START="$(get resume-on-start true)"
@@ -93,6 +100,12 @@ else
     echo "    resume_on_start: $RESUME_ON_START"
     echo "    reconcile_period_s: $RECONCILE_PERIOD_S"
   } > "$SNAP_DATA/params.yaml"
+
+  # servo mode does NOT intercept the trajectory stream (it pauses MoveIt Servo
+  # via a service instead), so tell so101-teleop to publish straight to the
+  # controller -- routing through a non-existent trajectory gate would strand
+  # the follower.
+  echo "SAFETY_JTC_TOPIC=\"/follower/arm_trajectory_controller/joint_trajectory\"" > "$SNAP_COMMON/safety-route/route.env"
 fi
 
 {

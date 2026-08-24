@@ -1,0 +1,19 @@
+#!/bin/bash
+# snap/hooks/connect-plug-safety-route
+#
+# Fires when the `safety-route` content interface to so101-safety is connected.
+# Record the intent ("connected") to a state file and restart the teleop daemon
+# so the launcher (snap/local/teleop-split-launch) re-evaluates its output
+# topic: it reads $SNAP_DATA/safety-route/route.env and routes trajectories
+# through the safety gate instead of straight at the controller.
+#
+# Why a state file instead of `snapctl is-connected` in the launcher: this hook
+# restarts the daemon *while the connect change is still in flight*, so a live
+# interface query from the restarted launcher is racy/stale. The hook already
+# knows the intent, so it records it authoritatively here.
+set -e
+
+mkdir -p "$SNAP_DATA"
+echo connected > "$SNAP_DATA/safety-route.state"
+
+snapctl restart "$SNAP_NAME.teleop" || true

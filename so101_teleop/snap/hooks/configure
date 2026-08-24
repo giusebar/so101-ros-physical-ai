@@ -48,12 +48,19 @@ case "$GRIPPER_MODE" in
 esac
 
 # Defaults match so101-bringup's namespaces/controllers so the two snaps
-# work together out of the box. jtc-topic points straight at the controller
-# by default (solo install works standalone); if so101-safety is also
-# installed in mode=jtc, set jtc-topic=/safety/follower/arm_trajectory_in
-# to route through the gate, or protective stops won't actually hold the arm.
+# work together out of the box.
+#
+# jtc-topic is special: leave it UNSET for automatic routing (the launcher
+# picks the target based on the `safety-route` content interface -- straight
+# at the controller when so101-safety is absent, through the gate's input
+# topic when it's connected). Setting jtc-topic explicitly forces that topic
+# and overrides auto-routing (escape hatch, e.g. non-default gate topics).
 LEADER_TOPIC="$(get leader-topic /leader/joint_states)"
-JTC_TOPIC="$(get jtc-topic /follower/arm_trajectory_controller/joint_trajectory)"
+JTC_EXPLICIT="$(snapctl get jtc-topic)"   # empty => auto-route in the launcher
+# Baseline written into params.yaml so the node always has a valid jtc_topic
+# even if the launcher does not override it. The launcher appends a
+# `-p jtc_topic:=<resolved>` that takes precedence over this value.
+JTC_TOPIC="/follower/arm_trajectory_controller/joint_trajectory"
 FWD_TOPIC="$(get fwd-topic /follower/arm_forward_controller/commands)"
 GRIPPER_FWD_TOPIC="$(get gripper-fwd-topic /follower/gripper_controller/commands)"
 GRIPPER_ACTION="$(get gripper-action /follower/gripper_controller/gripper_cmd)"
@@ -107,6 +114,7 @@ IFS="$old_ifs"
 } > "$SNAP_DATA/params.yaml"
 
 {
+  [ -n "$JTC_EXPLICIT" ] && echo "JTC_EXPLICIT=\"$JTC_EXPLICIT\""
   [ -n "$NAMESPACE" ] && echo "NAMESPACE=\"$NAMESPACE\""
   [ -n "$NODE_NAME" ] && echo "NODE_NAME=\"$NODE_NAME\""
   [ -n "$ROS_DOMAIN_ID" ] && echo "ROS_DOMAIN_ID=\"$ROS_DOMAIN_ID\""
