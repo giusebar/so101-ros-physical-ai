@@ -7,10 +7,16 @@ with the safety ROI overlaid), a raw normalised depth map (for other machine
 consumers), and a Bool protective-stop signal computed directly from the
 depth map.
 
-This is the non-NVIDIA counterpart to the snap-twin TensorRT demo. It does NOT
-import ``tensorrt`` or ``pycuda`` and does NOT open a camera device directly —
-the camera is provided by the existing ``so101_bringup`` camera stack (or any
-other publisher / bag / simulated camera).
+This node is hardware-agnostic about the ONNX Runtime execution provider: by
+default it uses ``CPUExecutionProvider`` (the non-NVIDIA counterpart to the
+snap-twin TensorRT demo), but the ``execution_providers`` /
+``engine_cache_dir`` parameters let the NVIDIA ``ai-vision-ros2`` snap variant
+run the exact same node on a Jetson GPU via ``TensorrtExecutionProvider`` /
+``CUDAExecutionProvider`` (ORT builds/caches the TensorRT engine on first run).
+It does NOT import ``tensorrt`` or ``pycuda`` directly and does NOT open a
+camera device directly — the camera is provided by the existing
+``so101_bringup`` camera stack (or any other publisher / bag / simulated
+camera).
 
 Safety-trigger logic (ROI proximity + hysteresis debounce) lives directly in
 this node rather than a separate ``so101_safety`` monitor: this is the
@@ -46,6 +52,13 @@ Parameters:
   publish_height      (int)    output height (default 518)
   min_period_s        (float)  minimum seconds between inferences (CPU throttle)
   intra_op_threads    (int)    ONNX Runtime intra-op thread count (0 = default)
+  execution_providers (string list) ORT execution providers, in priority order
+                               (default ["CPUExecutionProvider"]; NVIDIA snap
+                               uses ["TensorrtExecutionProvider",
+                               "CUDAExecutionProvider", "CPUExecutionProvider"])
+  engine_cache_dir    (string) TensorRT engine cache dir ("" = ORT default;
+                               NVIDIA snap points it at $SNAP_DATA so the
+                               first-run engine build persists)
   stop_topic          (string) Bool protective-stop output (default /safety/protective_stop)
   roi                 (string) "x1,y1,x2,y2" normalised center ROI
   near_threshold      (float)  normalised depth [0,1] above which a pixel is near
@@ -133,6 +146,11 @@ class DepthAnythingNode(Node):
         self.declare_parameter("publish_height", 518)
         self.declare_parameter("min_period_s", 0.0)
         self.declare_parameter("intra_op_threads", 0)
+        # Hardware-agnostic ORT execution-provider selection. Default is pure
+        # CPU (no NVIDIA); the NVIDIA ai-vision-ros2 snap variant overrides
+        # these via its configure hook to run on the Jetson GPU with TensorRT.
+        self.declare_parameter("execution_providers", ["CPUExecutionProvider"])
+        self.declare_parameter("engine_cache_dir", "")
         self.declare_parameter("stop_topic", "/safety/protective_stop")
         self.declare_parameter("roi", "0.25,0.2,0.75,0.85")
         self.declare_parameter("near_threshold", 0.6)
@@ -150,6 +168,8 @@ class DepthAnythingNode(Node):
         self._pub_h = int(self.get_parameter("publish_height").value)
         self._min_period = float(self.get_parameter("min_period_s").value)
         intra_threads = int(self.get_parameter("intra_op_threads").value)
+        execution_providers = list(self.get_parameter("execution_providers").value)
+        engine_cache_dir = str(self.get_parameter("engine_cache_dir").value)
         stop_topic = self.get_parameter("stop_topic").value
         self._roi = _parse_roi(self.get_parameter("roi").value)
         self._near = float(self.get_parameter("near_threshold").value)
@@ -159,21 +179,42 @@ class DepthAnythingNode(Node):
         n_clear = int(self.get_parameter("frames_to_clear").value)
         self._debouncer = _HysteresisDebouncer(n_block, n_clear)
 
-        # ── ONNX Runtime session (CPU) ──────────────────────────────────────
+        # ── ONNX Runtime session ────────────────────────────────────────────
         self.get_logger().info(f"Loading ONNX model: {model_path}")
         sess_opts = ort.SessionOptions()
         if intra_threads > 0:
             sess_opts.intra_op_num_threads = intra_threads
-        # CPUExecutionProvider is always available; this stays NVIDIA-free.
+
+        # Provider-specific options. When a TensorRT engine cache dir is given
+        # (the NVIDIA snap variant), persist the first-run engine build there
+        # so subsequent daemon starts skip the ~1-2 min rebuild. fp16 is safe
+        # for relative-depth / proximity-safety use.
+        provider_options = []
+        for provider in execution_providers:
+            if provider == "TensorrtExecutionProvider":
+                opts = {"trt_fp16_enable": True}
+                if engine_cache_dir:
+                    os.makedirs(engine_cache_dir, exist_ok=True)
+                    opts["trt_engine_cache_enable"] = True
+                    opts["trt_engine_cache_path"] = engine_cache_dir
+                provider_options.append(opts)
+            else:
+                provider_options.append({})
+
+        self.get_logger().info(
+            f"ORT providers (requested): {execution_providers} "
+            f"engine_cache_dir='{engine_cache_dir or '<default>'}'"
+        )
         self._session = ort.InferenceSession(
             model_path,
             sess_options=sess_opts,
-            providers=["CPUExecutionProvider"],
+            providers=execution_providers,
+            provider_options=provider_options,
         )
         self._input_name = self._session.get_inputs()[0].name
         self._output_name = self._session.get_outputs()[0].name
         self.get_logger().info(
-            f"ONNX session ready — providers={self._session.get_providers()} "
+            f"ONNX session ready — providers(active)={self._session.get_providers()} "
             f"input='{self._input_name}' output='{self._output_name}'"
         )
 

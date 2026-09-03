@@ -1,60 +1,145 @@
 name: ai-vision-ros2
-base: core24
-version: '1.0.0-depth'
-summary: SO-101 Depth Anything V2 (Small) depth visualisation (ROS 2 Jazzy)
+base: core22
+version: '1.0.0-depth-nvidia'
+summary: Depth Anything V2 depth visualisation, NVIDIA Jetson TensorRT (ROS 2 Humble)
 description: |
-  CPU monocular depth visualisation for the SO-101 arm. Subscribes to a ROS 2
-  image topic, runs Depth Anything V2 (Small) with ONNX Runtime, and republishes
+  GPU monocular depth visualisation for the SO-101 arm, on an NVIDIA Jetson
+  (Orin, JetPack 6.x). Subscribes to a ROS 2 image topic, runs Depth Anything
+  V2 (Small) with ONNX Runtime's TensorRT execution provider, and republishes
   a colorised relative-depth image (for viewing, with the safety ROI/trigger
   overlaid), a raw normalised depth map (32FC1, for other machine consumers),
   and a std_msgs/Bool protective-stop signal computed directly by this node
   (ROI proximity + hysteresis debounce).
 
-  This is the "ai-vision-ros2" snap's DEPTH variant, published on the
-  latest/stable channel. The model weights are bundled directly in this snap
-  (fetched from Hugging Face at build time) -- no content interface, no
-  separate model snap, no manual `snap connect` step required.
+  This is the NVIDIA variant of the "ai-vision-ros2" snap, published on the
+  latest/nvidia/* channels. It is the Jetson counterpart to the CPU variant on
+  latest/stable (depth, so101_depth_demo) and latest/edge (YOLO person
+  detection, so101_yolo_demo) -- same snap name, same `perception` service,
+  same `snap set` keys, so the channel-swap story is preserved per
+  architecture. The TensorRT engine is built and cached ON-DEVICE by ONNX
+  Runtime on first run (no separate model snap / content interface).
 
-  The SAME snap name also has a completely different PERSON-DETECTION variant
-  (YOLOv8n, so101_yolo_demo) published on latest/edge -- swap between them
-  live with:
-
-      snap refresh ai-vision-ros2 --channel=edge     # -> person detection
-      snap refresh ai-vision-ros2 --channel=stable    # -> back to depth
-
-  Runs as an always-on daemon (like `usb-cam`). Configure it with `snap set`
-  instead of launch arguments, e.g.:
+  Runs as an always-on daemon. Configure with `snap set`, e.g.:
 
       snap set ai-vision-ros2 input-image-topic=/my/camera/image_raw
       snap set ai-vision-ros2 output-image-topic=/camera/depth/visualization
       snap set ai-vision-ros2 output-depth-topic=/perception/depth
-      snap set ai-vision-ros2 min-period-s=0.1
 
-  Other options: model-input-size, publish-width, publish-height,
-  intra-op-threads, namespace, node-name, ros-domain-id, rmw-implementation,
-  stop-topic, roi, near-threshold, near-margin, min-area-ratio,
-  frames-to-block, frames-to-clear (protective-stop trigger tuning).
-
-  Check status with `snap services ai-vision-ros2` / `snap logs ai-vision-ros2`.
+  Requires JetPack 6.x on the target and the GPU interfaces connected (see
+  docs/ai_vision_ros2_nvidia.md). Check status with
+  `snap services ai-vision-ros2` / `snap logs ai-vision-ros2`.
 
 grade: stable
 confinement: strict
+compression: lzo
+
+architectures:
+  - build-on: [arm64]
+    build-for: [arm64]
+
+# JetPack 6.x (L4T r36.x) userspace libraries. The snap gets its CUDA / cuDNN
+# / TensorRT runtime from NVIDIA's repos (matching the on-device JetPack),
+package-repositories:
+  - type: apt
+    components: [main]
+    suites: [r36.4]
+    key-id: 3C6D1FF3100C8C3ABB0869C0E6543461A9996195
+    key-server: https://repo.download.nvidia.com/jetson/jetson-ota-public.asc
+    url: https://repo.download.nvidia.com/jetson/t234
+    architectures: [arm64]
+  - type: apt
+    components: [main]
+    suites: [r36.4]
+    key-id: 3C6D1FF3100C8C3ABB0869C0E6543461A9996195
+    key-server: https://repo.download.nvidia.com/jetson/jetson-ota-public.asc
+    url: https://repo.download.nvidia.com/jetson/common
+    architectures: [arm64]
+  # Canonical's ubuntu-tegra PPA -- the ACTUAL source of this device's Tegra GPU
+  # driver userspace shims (libcuda, libnvrm_*, libnvdla_*, libnvcudla,
+  # libnvcucompat, libnvsciipc). Verified on-device: these ship in
+  # nvidia-tegra-drivers-36-{igpu-cuda,graphic,nvsci}, installed from this PPA
+  # (NOT NVIDIA's repo, which only carries the older nvidia-l4t-* build). The
+  # gpu-driver part below pulls exactly these debs (pinned) and prunes to the
+  # driver .so tree -- replacing the old scrape-from-host collect script.
+  - type: apt
+    ppa: ubuntu-tegra/updates
+
+# Custom interface slot for the Tegra GPU device nodes.
+plugs:
+  tegra-gpu:
+    interface: system-files
+    write:
+      # Every real GPU device node CUDA touches on the Orin iGPU. system-files
+      # sets up BOTH the AppArmor rule AND the device-cgroup allowance PER
+      # EXACT node -- granting just the /dev/nvgpu/igpu0 directory is NOT
+      # enough (the inner channel nodes get EPERM from the device cgroup,
+      # giving "CUDA failure 999" at cudaSetDevice). Each of these must be
+      # listed individually.
+      - /dev/nvhost-gpu
+      - /dev/nvhost-as-gpu
+      - /dev/nvhost-ctrl-gpu
+      - /dev/nvhost-ctxsw-gpu
+      - /dev/nvhost-dbg-gpu
+      - /dev/nvhost-prof-gpu
+      - /dev/nvhost-prof-ctx-gpu
+      - /dev/nvhost-prof-dev-gpu
+      - /dev/nvhost-sched-gpu
+      - /dev/nvhost-nvsched-gpu
+      - /dev/nvhost-nvsched_ctrl_fifo-gpu
+      - /dev/nvhost-power-gpu
+      - /dev/nvhost-tsg-gpu
+      # Inner per-GPU channel nodes (the ones that were EPERM-denied).
+      - /dev/nvgpu/igpu0/as
+      - /dev/nvgpu/igpu0/channel
+      - /dev/nvgpu/igpu0/ctrl
+      - /dev/nvgpu/igpu0/ctxsw
+      - /dev/nvgpu/igpu0/dbg
+      - /dev/nvgpu/igpu0/nvsched
+      - /dev/nvgpu/igpu0/nvsched_ctrl_fifo
+      - /dev/nvgpu/igpu0/power
+      - /dev/nvgpu/igpu0/prof
+      - /dev/nvgpu/igpu0/prof-ctx
+      - /dev/nvgpu/igpu0/prof-dev
+      - /dev/nvgpu/igpu0/sched
+      - /dev/nvgpu/igpu0/tsg
+      # Memory + IPC + the nvidia char nodes.
+      - /dev/nvmap
+      - /dev/nvsciipc
+      - /dev/nvidia0
+      - /dev/nvidiactl
+      - /dev/nvidia-modeset
+    read:
+      - /dev/nvidia-caps/nvidia-cap1
+      - /dev/nvidia-caps/nvidia-cap2
 
 apps:
-  # Shared app/service name with the detection variant (so101_yolo_demo's
-  # snapcraft.yaml) so `snap services ai-vision-ros2` / the systemd unit stay
-  # identically named across a `snap refresh --channel=...` swap, even though
-  # the two variants are completely different ROS packages under the hood.
   perception:
-    extensions: [ros2-jazzy]
+    extensions: [ros2-humble-ros-base]
     command: usr/bin/depthanything-launch
     daemon: simple
     install-mode: disable
     restart-condition: on-failure
     restart-delay: 5s
+    environment:
+      # Library search path for ORT's CUDA/TensorRT providers. The Tegra driver
+      # shims live at the standard path /usr/lib/aarch64-linux-gnu/nvidia, made
+      # available there by the `layout` below (bound from $SNAP).
+      LD_LIBRARY_PATH: "/usr/lib/aarch64-linux-gnu/nvidia:$SNAP/usr/local/cuda-12.6/targets/aarch64-linux/lib:$SNAP/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
+      # Default TensorRT engine cache (overridable via engine-cache-dir).
+      ORT_ENGINE_CACHE_DIR: $SNAP_DATA/trt_engines
     plugs:
       - network
       - network-bind
+      - hardware-observe
+      - opengl
+      - kernel-module-observe
+      - tegra-gpu
+
+# Expose the staged Tegra driver shims at their real system path so CUDA / ORT
+# (and libcuda's own RUNPATH) find them without a $SNAP-relative search path.
+layout:
+  /usr/lib/aarch64-linux-gnu/nvidia:
+    bind: $SNAP/usr/lib/aarch64-linux-gnu/nvidia
 
 hooks:
   configure: {}
@@ -62,37 +147,55 @@ hooks:
 parts:
   depth-demo:
     plugin: colcon
-    # snapcraft.yaml lives at so101_depth_demo/snap/snapcraft.yaml, so the
-    # project root IS the so101_depth_demo package directory -- "." is just
-    # this one ROS package, so colcon/rosdep never sees unrelated sibling
-    # packages (e.g. so101_description) in the wider monorepo.
     source: .
     stage-packages:
       - libgomp1
       # opencv-python-headless (cv2) dlopen()s liblapack.so.3/libblas.so.3 at
-      # runtime for linear-algebra ops. The debs install those under
-      # usr/lib/<triplet>/lapack|blas/, which isn't on the default library
-      # search path -- staged here and exposed via LD_LIBRARY_PATH in
-      # snap/local/depthanything-launch (same fix as the usb-cam snap's
-      # cv_bridge dependency).
+      # runtime; the debs install those under usr/lib/<triplet>/lapack|blas/,
+      # which isn't on the default search path -- exposed via LD_LIBRARY_PATH
+      # in the launcher (same fix as the CPU variant).
       - liblapack3
       - libblas3
+      # CUDA / cuDNN / TensorRT runtime for the TensorRT execution provider.
+      # Versions track JetPack 6.x r36.4 (CUDA 12.6, cuDNN 9.3, TensorRT
+      # 10.3); verified present in the JetPack repos above. tensorrt-libs is
+      # the runtime meta-package pulling libnvinfer10 + plugin + onnx parser.
+      - cuda-cudart-12-6
+      - libcublas-12-6
+      # cufft: dlopen'd by ORT's CUDA provider (linter-flagged missing dep of
+      # libonnxruntime_providers_cuda.so).
+      - libcufft-12-6
+      # cudla: installs libcudla.so.1 into the CUDA target dir (already on
+      # LD_LIBRARY_PATH); dlopen'd by ORT's TensorRT provider.
+      - libcudla-12-6
+      - libcudnn9-cuda-12
+      - tensorrt-libs
+      # NOTE: the driver shim libs (libcuda.so.1, libnvcudla.so, libnvdla_*.so,
+      # libnvrm_*.so, libnvcucompat.so, libnvsciipc.so ...) are NOT in NVIDIA's
+      # repo above -- they come from Canonical's ubuntu-tegra PPA and are staged
+      # by the gpu-driver part below.
     build-packages:
       - python3-pip
-    # colcon builds the ROS package; then install the pure-Python inference
-    # dependencies (not available as rosdeps) into the Debian dist-packages
-    # path so they are on the default Python import path inside the snap.
+    # colcon builds the ROS package; then install the Python inference
+    # deps into the Debian dist-packages path.
+    #onnxruntime comes from the Jetson AI Lab index (cp310 /
+    # Python 3.10 / aarch64 / CUDA 12.6) -- the only prebuilt aarch64 ORT-gpu
+    # wheels. core22's Python is 3.10, so this wheel is ABI-compatible.
     override-build: |
       craftctl default
       pip3 install \
-        --break-system-packages \
+        --ignore-installed \
         --no-compile \
         --target="${CRAFT_PART_INSTALL}/usr/lib/python3/dist-packages" \
-        "onnxruntime" \
         "numpy" \
         "opencv-python-headless"
+      pip3 install \
+        --ignore-installed \
+        --no-compile \
+        --target="${CRAFT_PART_INSTALL}/usr/lib/python3/dist-packages" \
+        "https://pypi.jetson-ai-lab.io/jp6/cu126/+f/d98/0b934b9a29c1a/onnxruntime_gpu-1.24.0-cp310-cp310-linux_aarch64.whl#sha256=d980b934b9a29c1a9d6f39751edd7662b69fadd75556a10ff363773a58ce0950"
 
-  # Model weights bundled directly into this snap
+  # Model weights bundled directly into this snap.
   model:
     plugin: nil
     build-packages:
@@ -105,9 +208,6 @@ parts:
       curl -fL --retry 5 --retry-delay 2 \
         "https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/main/onnx/model.onnx?download=true" \
         -o "${model}"
-      # Fail early if the download produced an empty file or an HTML error
-      # page (the model is tens of MB; a redirect/error page would be a few
-      # KB and start with '<').
       test -s "${model}"
       size=$(stat -c%s "${model}")
       test "${size}" -gt 1000000 || { echo "Model too small (${size} bytes)" >&2; exit 1; }
@@ -119,6 +219,44 @@ parts:
     source: snap/local
     organize:
       depthanything-launch: usr/bin/depthanything-launch
+      fastdds_no_shared_memory.xml: usr/share/
+
+  # Tegra GPU driver user-space shims (libcuda, libnvcudla, libnvdla_*,
+  # libnvrm_*, libnvcucompat, libnvsciipc, ...) sourcedfrom Canonical's ubuntu-tegra PPA.
+  # These are kernel-driver-matched and can't be reached from a strict snap at runtime,
+  # so they are staged in the snap.
+  #
+  # VERSION PIN: these shims must match the running nvgpu kernel driver. Pinned
+  # to this device's installed version. If the Jetson's driver updates, bump it
+  # to match `dpkg-query -W nvidia-tegra-drivers-36-igpu-cuda` on the device.
+  gpu-driver:
+    plugin: nil
     override-build: |
-      craftctl default
-      chmod +x "${CRAFT_PART_INSTALL}/depthanything-launch"
+      set -eux
+      TEGRA_VER="36.5.20260115-0ubuntu1"
+      pkgs="nvidia-tegra-drivers-36-igpu-cuda nvidia-tegra-drivers-36-graphic nvidia-tegra-drivers-36-nvsci"
+      workdir="${CRAFT_PART_BUILD}/debs"
+      rm -rf "${workdir}"; mkdir -p "${workdir}"
+      cd "${workdir}"
+      for p in ${pkgs}; do
+        apt-get download "${p}=${TEGRA_VER}"
+      done
+      mkdir -p "${workdir}/x"
+      for d in *.deb; do dpkg-deb -x "${d}" "${workdir}/x"; done
+      src="${workdir}/x/usr/lib/aarch64-linux-gnu/nvidia"
+      dest="${CRAFT_PART_INSTALL}/usr/lib/aarch64-linux-gnu/nvidia"
+      mkdir -p "${dest}"
+      # Copy ONLY the minimal driver-shim closure (the known-good set that the
+      # old scrape/collect script produced -- verified byte-identical to these
+      # PPA debs).
+      shims="libcuda libnvcucompat libnvcudla libnvdla_compiler libnvdla_runtime \
+             libnvos libnvrm_chip libnvrm_gpu libnvrm_host1x libnvrm_mem \
+             libnvrm_sync libnvsciipc libnvsocsys libnvtegrahv"
+      for base in ${shims}; do
+        cp -a "${src}/${base}.so"* "${dest}/" 2>/dev/null || true
+      done
+      # Sanity: fail the build if the critical shims didn't land.
+      for lib in libcuda.so.1 libnvcudla.so libnvcucompat.so libnvsciipc.so libnvdla_compiler.so; do
+        test -e "${dest}/${lib}" || { echo "MISSING driver shim: ${lib}" >&2; exit 1; }
+      done
+      echo "Staged Tegra driver shims ($(ls "${dest}" | wc -l) files, $(du -sh "${dest}" | cut -f1))"

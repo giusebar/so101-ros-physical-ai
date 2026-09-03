@@ -1,21 +1,11 @@
 #!/bin/bash
 # snap/hooks/configure
 #
-# Applies `snap set ai-vision-ros2 <key>=<value>` configuration (depth
-# variant, so101_depth_demo):
-#   1. fills in defaults (mostly matching so101_depth_demo/launch/depth_demo.launch.py,
-#      except input-image-topic -- see below)
-#   2. renders $SNAP_DATA/params.yaml (ros__parameters block for
-#      depth_anything_node) — model_path is NOT user-settable, it always
-#      points at the weights bundled directly in this snap (no content
-#      interface: see snap/snapcraft.yaml's "model" part)
-#   3. renders $SNAP_DATA/runtime.env (namespace/node-name/DDS overrides for
-#      the launcher, which are not depth_anything_node ROS parameters)
-#   4. (re)starts the daemon -- the model is always present (bundled at
-#      build time), so there's no "wait for content interface" gating here
-#      unlike the old depthanything/depthanything-model split
-#
-# See snap/local/depthanything-launch for the consumer side.
+# Applies `snap set ai-vision-ros2 <key>=<value>` configuration for the
+# NVIDIA / Jetson depth variant. Mirrors the CPU variant's configure hook
+# and adds the NVIDIA-specific execution-providers / engine-cache-dir keys.
+# Renders $SNAP_DATA/params.yaml (ros__parameters for depth_anything_node)
+# and $SNAP_DATA/runtime.env (namespace/node-name/DDS overrides).
 set -e
 
 get() {
@@ -31,7 +21,7 @@ get_number() {
   val="$(get "$1" "$2")"
   case "$val" in
     ''|*[!0-9.-]*)
-      echo "ai-vision-ros2 (depth): invalid number for $1: '$val'" >&2
+      echo "ai-vision-ros2 (nvidia depth): invalid number for $1: '$val'" >&2
       exit 1
       ;;
   esac
@@ -40,12 +30,6 @@ get_number() {
 
 MODEL_PATH="$SNAP/models/depth_anything_v2_small.onnx"
 
-# Default is /static_camera/image_raw (the usb-cam snap's overhead-camera
-# topic), NOT /follower/image_raw (depth_demo.launch.py's plain-ROS-launch
-# default, aimed at wrist-camera testing without snaps) -- matches the
-# detection variant's default (so101_yolo_demo/snap/hooks/configure) so both
-# channels of this snap work out of the box against the same usb-cam setup
-# with no `snap set` needed.
 INPUT_IMAGE_TOPIC="$(get input-image-topic /static_camera/image_raw)"
 OUTPUT_IMAGE_TOPIC="$(get output-image-topic /camera/depth/visualization)"
 OUTPUT_DEPTH_TOPIC="$(get output-depth-topic /perception/depth)"
@@ -53,19 +37,17 @@ MODEL_INPUT_SIZE="$(get_number model-input-size 308)"
 PUBLISH_WIDTH="$(get_number publish-width 256)"
 PUBLISH_HEIGHT="$(get_number publish-height 256)"
 MIN_PERIOD_S="$(get_number min-period-s 0.0)"
-# NOTE: default is intentionally non-zero (unlike the plain-launch default of
-# 0 = "let ONNX Runtime decide"). Leaving this at 0 makes ORT auto-detect the
-# thread count as the number of CPU cores AND try to pthread_setaffinity_np()
-# each worker thread to a specific core -- strict confinement's seccomp
-# profile denies that syscall, so on a many-core host this floods the log
-# with (harmless but alarming, and very noisy) "pthread_setaffinity_np
-# failed ... Operation not permitted" errors, one per thread. Passing an
-# explicit thread count skips ORT's auto-affinity-pinning path entirely.
 INTRA_OP_THREADS="$(get_number intra-op-threads 4)"
 
+# ── NVIDIA / execution-provider selection ───────────────────────────────────
+# Comma-separated ORT providers in priority order. Default runs the depth
+# model on the Jetson GPU via TensorRT (fp16), falling back to CUDA then CPU.
+# ORT builds + caches the TensorRT engine under engine-cache-dir on first run.
+EXECUTION_PROVIDERS="$(get execution-providers "TensorrtExecutionProvider,CUDAExecutionProvider,CPUExecutionProvider")"
+ENGINE_CACHE_DIR="$(get engine-cache-dir "$SNAP_DATA/trt_engines")"
+
 # Protective-stop trigger logic (ROI proximity + hysteresis debounce),
-# computed directly by depth_anything_node itself and published straight to
-# stop-topic -- see so101_depth_demo/so101_depth_demo/depth_anything_node.py.
+# computed directly by depth_anything_node itself.
 STOP_TOPIC="$(get stop-topic /safety/protective_stop)"
 ROI="$(get roi "0.25,0.2,0.75,0.85")"
 NEAR_THRESHOLD="$(get_number near-threshold 0.6)"
@@ -80,6 +62,19 @@ ROS_DOMAIN_ID="$(get ros-domain-id "")"
 RMW_IMPLEMENTATION="$(get rmw-implementation "")"
 
 mkdir -p "$SNAP_DATA"
+mkdir -p "$ENGINE_CACHE_DIR"
+
+# Convert the comma-separated provider list into a YAML flow list of quoted
+# strings: "A,B,C" -> ["A", "B", "C"]
+PROVIDERS_YAML="$(printf '%s' "$EXECUTION_PROVIDERS" | awk -F',' '{
+  out="[";
+  for (i=1; i<=NF; i++) {
+    gsub(/^[ \t]+|[ \t]+$/, "", $i);
+    out = out (i>1 ? ", " : "") "\"" $i "\"";
+  }
+  out = out "]";
+  print out
+}')"
 
 {
   echo "/**:"
@@ -93,6 +88,8 @@ mkdir -p "$SNAP_DATA"
   echo "    publish_height: $PUBLISH_HEIGHT"
   echo "    min_period_s: $MIN_PERIOD_S"
   echo "    intra_op_threads: $INTRA_OP_THREADS"
+  echo "    execution_providers: $PROVIDERS_YAML"
+  echo "    engine_cache_dir: \"$ENGINE_CACHE_DIR\""
   echo "    stop_topic: \"$STOP_TOPIC\""
   echo "    roi: \"$ROI\""
   echo "    near_threshold: $NEAR_THRESHOLD"
@@ -107,6 +104,7 @@ mkdir -p "$SNAP_DATA"
   [ -n "$NODE_NAME" ] && echo "NODE_NAME=\"$NODE_NAME\""
   [ -n "$ROS_DOMAIN_ID" ] && echo "ROS_DOMAIN_ID=\"$ROS_DOMAIN_ID\""
   [ -n "$RMW_IMPLEMENTATION" ] && echo "RMW_IMPLEMENTATION=\"$RMW_IMPLEMENTATION\""
+  echo "ORT_ENGINE_CACHE_DIR=\"$ENGINE_CACHE_DIR\""
   true
 } > "$SNAP_DATA/runtime.env"
 

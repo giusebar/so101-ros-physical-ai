@@ -14,6 +14,14 @@ It publishes a colorised (INFERNO) relative-depth image on
 `/camera/depth/visualization` (`sensor_msgs/Image`, `rgb8`) — the same topic the
 original snap-twin display expects.
 
+> **NVIDIA / Jetson variant:** the same `depth_anything_node` also runs on a
+> Jetson GPU. This `nvidia/ai-demo` branch carries the TensorRT variant of the
+> `ai-vision-ros2` snap (`snap/snapcraft.yaml`, ROS 2 Humble on core22) that
+> runs ONNX Runtime's `TensorrtExecutionProvider` — selected purely via the
+> `execution_providers` / `engine_cache_dir` ROS parameters, so this node
+> itself stays hardware-agnostic. See
+> [`../docs/ai_vision_ros2_nvidia.md`](../docs/ai_vision_ros2_nvidia.md).
+
 > **Why not just run snap-twin?** The snap-twin
 > [`depth_anything_node.py`](../snap-twin/so101_ros2/so101_ros2/depth_anything_node.py)
 > imports `tensorrt` and `pycuda` at module load and loads a `.engine` file. On a

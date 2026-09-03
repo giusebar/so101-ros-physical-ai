@@ -1,14 +1,16 @@
 #!/bin/bash
 # snap/local/depthanything-launch
 #
-# Entry point for the `depthanything` daemon app. Reads the runtime.env and
-# params.yaml rendered by the configure hook (snap/hooks/configure) and execs
-# the depth_anything_node ROS 2 node directly (no `ros2 launch` involved).
+# Entry point for the `perception` daemon app (NVIDIA / Jetson variant).
+# Identical to the CPU variant's launcher, plus:
+#   * LD_LIBRARY_PATH already carries CUDA / TensorRT / Tegra (set in the
+#     app's environment in snapcraft.yaml); here we only add the
+#     lapack/blas dirs (cv2) which are NOT on the default search path.
+#   * Ensures the TensorRT engine cache dir exists (ORT builds the engine
+#     on first run, which can take ~1-2 minutes on-device).
 #
-# This script runs inside the ros2-jazzy extension's command-chain, so the
-# ROS 2 underlay/overlay environment (AMENT_PREFIX_PATH, LD_LIBRARY_PATH,
-# PYTHONPATH, ...) is already sourced and the so101_depth_demo package's
-# console-script entry points are on PATH.
+# Runs inside the ros2-humble extension's command-chain, so the ROS 2
+# environment is already sourced and depth_anything_node is on PATH.
 set -eu
 
 PARAMS_FILE="$SNAP_DATA/params.yaml"
@@ -16,22 +18,13 @@ RUNTIME_ENV="$SNAP_DATA/runtime.env"
 DEPTH_ANYTHING_NODE_EXE="$SNAP/opt/ros/snap/lib/so101_depth_demo/depth_anything_node"
 
 # opencv-python-headless (cv2) dlopen()s liblapack.so.3/libblas.so.3 at
-# runtime. The liblapack3/libblas3 debs install those under
-# usr/lib/<triplet>/lapack|blas/, which isn't on the default library search
-# path, so add it explicitly here (triplet varies by arch). Same fix as the
-# usb-cam snap's cv_bridge dependency.
-case "${SNAP_ARCH:-}" in
-  amd64) triplet=x86_64-linux-gnu ;;
-  arm64) triplet=aarch64-linux-gnu ;;
-  *) triplet="" ;;
-esac
-if [ -n "$triplet" ]; then
-  export LD_LIBRARY_PATH="$SNAP/usr/lib/$triplet/lapack:$SNAP/usr/lib/$triplet/blas:${LD_LIBRARY_PATH:-}"
-fi
+# runtime; the debs install those under usr/lib/<triplet>/lapack|blas/,
+# which isn't on the default library search path (aarch64 on Jetson).
+export LD_LIBRARY_PATH="$SNAP/usr/lib/aarch64-linux-gnu/lapack:$SNAP/usr/lib/aarch64-linux-gnu/blas:${LD_LIBRARY_PATH:-}"
 
 if [ ! -f "$PARAMS_FILE" ]; then
-  echo "depthanything: no configuration found yet at $PARAMS_FILE" >&2
-  echo "depthanything: the configure hook should have created this on install" >&2
+  echo "depthanything (nvidia): no configuration found yet at $PARAMS_FILE" >&2
+  echo "depthanything (nvidia): the configure hook should have created this on install" >&2
   exit 1
 fi
 
@@ -40,6 +33,18 @@ if [ -f "$RUNTIME_ENV" ]; then
   # shellcheck disable=SC1090
   . "$RUNTIME_ENV"
 fi
+
+# Disable Fast DDS shared-memory transport (force UDP-only). SHM can't cross
+# strict-confinement sandboxes. Only meaningful for a Fast DDS RMW.
+case "${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}" in
+  rmw_fastrtps_*)
+    export FASTRTPS_DEFAULT_PROFILES_FILE="$SNAP/usr/share/fastdds_no_shared_memory.xml"
+    ;;
+esac
+
+# Make sure the TensorRT engine cache dir exists before ORT tries to use it.
+ENGINE_CACHE_DIR="${ORT_ENGINE_CACHE_DIR:-$SNAP_DATA/trt_engines}"
+mkdir -p "$ENGINE_CACHE_DIR"
 
 set -- "$DEPTH_ANYTHING_NODE_EXE" --ros-args --params-file "$PARAMS_FILE"
 
@@ -51,5 +56,5 @@ if [ -n "${NAMESPACE:-}" ]; then
   set -- "$@" -r __ns:="$NAMESPACE"
 fi
 
-echo "depthanything: exec: $*" >&2
+echo "depthanything (nvidia): exec: $*" >&2
 exec "$@"
