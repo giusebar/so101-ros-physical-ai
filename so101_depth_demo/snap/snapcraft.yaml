@@ -126,7 +126,7 @@ apps:
       # available there by the `layout` below (bound from $SNAP).
       LD_LIBRARY_PATH: "/usr/lib/aarch64-linux-gnu/nvidia:$SNAP/usr/local/cuda-12.6/targets/aarch64-linux/lib:$SNAP/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
       # Default TensorRT engine cache (overridable via engine-cache-dir).
-      ORT_ENGINE_CACHE_DIR: $SNAP_DATA/trt_engines
+      ORT_ENGINE_CACHE_DIR: $SNAP_COMMON/trt_engines
     plugs:
       - network
       - network-bind
@@ -221,8 +221,21 @@ parts:
       depthanything-launch: usr/bin/depthanything-launch
       fastdds_no_shared_memory.xml: usr/share/
 
+  # Prebuilt TensorRT engine cache shipped read-only in the snap. 
+  # Generated once on a reference Orin and seeded into $SNAP_COMMON/trt_engines on
+  # first run. Lets a matching device skip low first-inference engine build.
+  # If it DOESN'T match (different
+  # GPU / TensorRT version / model / precision), ORT ignores it and rebuilds
+  # automatically. Regenerate + re-copy ./prebuilt_engines/ when the model or
+  # TensorRT version changes.
+  prebuilt-engine:
+    plugin: dump
+    source: prebuilt_engines
+    organize:
+      "*": prebuilt_engines/
+
   # Tegra GPU driver user-space shims (libcuda, libnvcudla, libnvdla_*,
-  # libnvrm_*, libnvcucompat, libnvsciipc, ...) sourcedfrom Canonical's ubuntu-tegra PPA.
+  # libnvrm_*, libnvcucompat, libnvsciipc, ...) sourced from Canonical's ubuntu-tegra PPA.
   # These are kernel-driver-matched and can't be reached from a strict snap at runtime,
   # so they are staged in the snap.
   #
