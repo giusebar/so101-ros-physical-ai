@@ -43,8 +43,11 @@ INTRA_OP_THREADS="$(get_number intra-op-threads 4)"
 # Comma-separated ORT providers in priority order. Default runs the depth
 # model on the Jetson GPU via TensorRT (fp16), falling back to CUDA then CPU.
 # ORT builds + caches the TensorRT engine under engine-cache-dir on first run.
+# Default cache lives in $SNAP_COMMON (shared across all revisions/channels,
+# not copied on refresh) so each model's engine is built once ever and channel
+# swaps reuse it instead of rebuilding.
 EXECUTION_PROVIDERS="$(get execution-providers "TensorrtExecutionProvider,CUDAExecutionProvider,CPUExecutionProvider")"
-ENGINE_CACHE_DIR="$(get engine-cache-dir "$SNAP_DATA/trt_engines")"
+ENGINE_CACHE_DIR="$(get engine-cache-dir "$SNAP_COMMON/trt_engines")"
 
 # Protective-stop trigger logic (ROI proximity + hysteresis debounce),
 # computed directly by depth_anything_node itself.

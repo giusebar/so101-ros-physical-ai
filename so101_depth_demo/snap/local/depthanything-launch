@@ -43,8 +43,19 @@ case "${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}" in
 esac
 
 # Make sure the TensorRT engine cache dir exists before ORT tries to use it.
-ENGINE_CACHE_DIR="${ORT_ENGINE_CACHE_DIR:-$SNAP_DATA/trt_engines}"
+# Default in $SNAP_COMMON (shared across revisions/channels) so engines survive
+# refreshes / channel swaps and are only built once each.
+ENGINE_CACHE_DIR="${ORT_ENGINE_CACHE_DIR:-$SNAP_COMMON/trt_engines}"
 mkdir -p "$ENGINE_CACHE_DIR"
+
+# Seed the bundled prebuilt engine(s) on first run so a matching device skips
+# the ~1-2 min build. -n (no-clobber) means a locally-rebuilt engine always
+# wins, and ORT validates each cached engine and rebuilds automatically if it
+# doesn't match this device's GPU / TensorRT version / model / precision -- so
+# a stale bundled engine is harmless.
+if [ -d "$SNAP/prebuilt_engines" ]; then
+  cp -an "$SNAP/prebuilt_engines/." "$ENGINE_CACHE_DIR/" 2>/dev/null || true
+fi
 
 set -- "$DEPTH_ANYTHING_NODE_EXE" --ros-args --params-file "$PARAMS_FILE"
 
