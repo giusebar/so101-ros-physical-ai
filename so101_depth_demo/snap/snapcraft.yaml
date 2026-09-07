@@ -54,63 +54,10 @@ package-repositories:
     key-server: https://repo.download.nvidia.com/jetson/jetson-ota-public.asc
     url: https://repo.download.nvidia.com/jetson/common
     architectures: [arm64]
-  # Canonical's ubuntu-tegra PPA -- the ACTUAL source of this device's Tegra GPU
-  # driver userspace shims (libcuda, libnvrm_*, libnvdla_*, libnvcudla,
-  # libnvcucompat, libnvsciipc). Verified on-device: these ship in
-  # nvidia-tegra-drivers-36-{igpu-cuda,graphic,nvsci}, installed from this PPA
-  # (NOT NVIDIA's repo, which only carries the older nvidia-l4t-* build). The
-  # gpu-driver part below pulls exactly these debs (pinned) and prunes to the
-  # driver .so tree -- replacing the old scrape-from-host collect script.
+  # Canonical ubuntu-tegra PPA: source of the Tegra driver shims that must match
+  # this device's kernel nvgpu driver (see the gpu-driver part).
   - type: apt
     ppa: ubuntu-tegra/updates
-
-# Custom interface slot for the Tegra GPU device nodes.
-plugs:
-  tegra-gpu:
-    interface: system-files
-    write:
-      # Every real GPU device node CUDA touches on the Orin iGPU. system-files
-      # sets up BOTH the AppArmor rule AND the device-cgroup allowance PER
-      # EXACT node -- granting just the /dev/nvgpu/igpu0 directory is NOT
-      # enough (the inner channel nodes get EPERM from the device cgroup,
-      # giving "CUDA failure 999" at cudaSetDevice). Each of these must be
-      # listed individually.
-      - /dev/nvhost-gpu
-      - /dev/nvhost-as-gpu
-      - /dev/nvhost-ctrl-gpu
-      - /dev/nvhost-ctxsw-gpu
-      - /dev/nvhost-dbg-gpu
-      - /dev/nvhost-prof-gpu
-      - /dev/nvhost-prof-ctx-gpu
-      - /dev/nvhost-prof-dev-gpu
-      - /dev/nvhost-sched-gpu
-      - /dev/nvhost-nvsched-gpu
-      - /dev/nvhost-nvsched_ctrl_fifo-gpu
-      - /dev/nvhost-power-gpu
-      - /dev/nvhost-tsg-gpu
-      # Inner per-GPU channel nodes (the ones that were EPERM-denied).
-      - /dev/nvgpu/igpu0/as
-      - /dev/nvgpu/igpu0/channel
-      - /dev/nvgpu/igpu0/ctrl
-      - /dev/nvgpu/igpu0/ctxsw
-      - /dev/nvgpu/igpu0/dbg
-      - /dev/nvgpu/igpu0/nvsched
-      - /dev/nvgpu/igpu0/nvsched_ctrl_fifo
-      - /dev/nvgpu/igpu0/power
-      - /dev/nvgpu/igpu0/prof
-      - /dev/nvgpu/igpu0/prof-ctx
-      - /dev/nvgpu/igpu0/prof-dev
-      - /dev/nvgpu/igpu0/sched
-      - /dev/nvgpu/igpu0/tsg
-      # Memory + IPC + the nvidia char nodes.
-      - /dev/nvmap
-      - /dev/nvsciipc
-      - /dev/nvidia0
-      - /dev/nvidiactl
-      - /dev/nvidia-modeset
-    read:
-      - /dev/nvidia-caps/nvidia-cap1
-      - /dev/nvidia-caps/nvidia-cap2
 
 apps:
   perception:
@@ -121,10 +68,7 @@ apps:
     restart-condition: on-failure
     restart-delay: 5s
     environment:
-      # Library search path for ORT's CUDA/TensorRT providers. The Tegra driver
-      # shims live at the standard path /usr/lib/aarch64-linux-gnu/nvidia, made
-      # available there by the `layout` below (bound from $SNAP).
-      LD_LIBRARY_PATH: "/usr/lib/aarch64-linux-gnu/nvidia:$SNAP/usr/local/cuda-12.6/targets/aarch64-linux/lib:$SNAP/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
+      LD_LIBRARY_PATH: "$SNAP/usr/lib/aarch64-linux-gnu/nvidia:/var/lib/snapd/lib/gl:/var/lib/snapd/lib/gl32:$SNAP/usr/local/cuda-12.6/targets/aarch64-linux/lib:$SNAP/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
       # Default TensorRT engine cache (overridable via engine-cache-dir).
       ORT_ENGINE_CACHE_DIR: $SNAP_COMMON/trt_engines
     plugs:
@@ -133,13 +77,6 @@ apps:
       - hardware-observe
       - opengl
       - kernel-module-observe
-      - tegra-gpu
-
-# Expose the staged Tegra driver shims at their real system path so CUDA / ORT
-# (and libcuda's own RUNPATH) find them without a $SNAP-relative search path.
-layout:
-  /usr/lib/aarch64-linux-gnu/nvidia:
-    bind: $SNAP/usr/lib/aarch64-linux-gnu/nvidia
 
 hooks:
   configure: {}
@@ -170,10 +107,10 @@ parts:
       - libcudla-12-6
       - libcudnn9-cuda-12
       - tensorrt-libs
-      # NOTE: the driver shim libs (libcuda.so.1, libnvcudla.so, libnvdla_*.so,
-      # libnvrm_*.so, libnvcucompat.so, libnvsciipc.so ...) are NOT in NVIDIA's
-      # repo above -- they come from Canonical's ubuntu-tegra PPA and are staged
-      # by the gpu-driver part below.
+      # NOTE: the Tegra driver shims (libcuda, libnvcudla, libnvdla_*, libnvrm_*,
+      # libnvcucompat, libnvsciipc, ...) are staged separately by the gpu-driver
+      # part below (from the PPA); only the CUDA/cuDNN/TensorRT compute libs are
+      # staged here from NVIDIA's Jetson repos.
     build-packages:
       - python3-pip
     # colcon builds the ROS package; then install the Python inference
@@ -221,27 +158,23 @@ parts:
       depthanything-launch: usr/bin/depthanything-launch
       fastdds_no_shared_memory.xml: usr/share/
 
-  # Prebuilt TensorRT engine cache shipped read-only in the snap. 
-  # Generated once on a reference Orin and seeded into $SNAP_COMMON/trt_engines on
-  # first run. Lets a matching device skip low first-inference engine build.
-  # If it DOESN'T match (different
-  # GPU / TensorRT version / model / precision), ORT ignores it and rebuilds
-  # automatically. Regenerate + re-copy ./prebuilt_engines/ when the model or
-  # TensorRT version changes.
+  # Prebuilt TensorRT engine cache shipped read-only and seeded into
+  # $SNAP_COMMON/trt_engines on first run, so a matching device skips the engine
+  # build. ORT rebuilds automatically if it doesn't match (GPU / TensorRT
+  # version / model / precision). Regenerate ./prebuilt_engines/ when those
+  # change.
   prebuilt-engine:
     plugin: dump
     source: prebuilt_engines
     organize:
       "*": prebuilt_engines/
 
-  # Tegra GPU driver user-space shims (libcuda, libnvcudla, libnvdla_*,
-  # libnvrm_*, libnvcucompat, libnvsciipc, ...) sourced from Canonical's ubuntu-tegra PPA.
-  # These are kernel-driver-matched and can't be reached from a strict snap at runtime,
-  # so they are staged in the snap.
-  #
-  # VERSION PIN: these shims must match the running nvgpu kernel driver. Pinned
-  # to this device's installed version. If the Jetson's driver updates, bump it
-  # to match `dpkg-query -W nvidia-tegra-drivers-36-igpu-cuda` on the device.
+  # Tegra driver shims from the ubuntu-tegra PPA, pinned to this device's kernel
+  # nvgpu driver version. These MUST match the running kernel driver -- a skew
+  # shows up at runtime as "chip Id=0" / NvRmGpuLibOpen failure, not a missing
+  # library. Bump TEGRA_VER to match `dpkg-query -W nvidia-tegra-drivers-36-igpu-cuda`
+  # if the device driver updates. Pruned to the shim allowlist (do NOT stage the
+  # full driver: its compute-core libs would shadow opengl's host-injected copies).
   gpu-driver:
     plugin: nil
     override-build: |
@@ -259,16 +192,12 @@ parts:
       src="${workdir}/x/usr/lib/aarch64-linux-gnu/nvidia"
       dest="${CRAFT_PART_INSTALL}/usr/lib/aarch64-linux-gnu/nvidia"
       mkdir -p "${dest}"
-      # Copy ONLY the minimal driver-shim closure (the known-good set that the
-      # old scrape/collect script produced -- verified byte-identical to these
-      # PPA debs).
       shims="libcuda libnvcucompat libnvcudla libnvdla_compiler libnvdla_runtime \
              libnvos libnvrm_chip libnvrm_gpu libnvrm_host1x libnvrm_mem \
              libnvrm_sync libnvsciipc libnvsocsys libnvtegrahv"
       for base in ${shims}; do
         cp -a "${src}/${base}.so"* "${dest}/" 2>/dev/null || true
       done
-      # Sanity: fail the build if the critical shims didn't land.
       for lib in libcuda.so.1 libnvcudla.so libnvcucompat.so libnvsciipc.so libnvdla_compiler.so; do
         test -e "${dest}/${lib}" || { echo "MISSING driver shim: ${lib}" >&2; exit 1; }
       done
