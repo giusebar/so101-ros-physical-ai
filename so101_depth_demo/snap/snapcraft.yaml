@@ -38,7 +38,7 @@ architectures:
     build-for: [arm64]
 
 # JetPack 6.x (L4T r36.x) userspace libraries. The snap gets its CUDA / cuDNN
-# / TensorRT runtime from NVIDIA's repos (matching the on-device JetPack),
+# / TensorRT runtime from NVIDIA's repos (matching the on-device JetPack).
 package-repositories:
   - type: apt
     components: [main]
@@ -84,37 +84,18 @@ parts:
     source: .
     stage-packages:
       - libgomp1
-      # opencv-python-headless (cv2) dlopen()s liblapack.so.3/libblas.so.3 at
-      # runtime; the debs install those under usr/lib/<triplet>/lapack|blas/,
-      # which isn't on the default search path -- exposed via LD_LIBRARY_PATH
-      # in the launcher (same fix as the CPU variant).
       - liblapack3
       - libblas3
-      # CUDA / cuDNN / TensorRT runtime for the TensorRT execution provider.
-      # Versions track JetPack 6.x r36.5 (CUDA 12.6, cuDNN 9.3, TensorRT
-      # 10.3); verified present in the JetPack repos above. tensorrt-libs is
-      # the runtime meta-package pulling libnvinfer10 + plugin + onnx parser.
       - cuda-cudart-12-6
       - libcublas-12-6
-      # cufft: dlopen'd by ORT's CUDA provider (linter-flagged missing dep of
-      # libonnxruntime_providers_cuda.so).
       - libcufft-12-6
-      # cudla: installs libcudla.so.1 into the CUDA target dir (already on
-      # LD_LIBRARY_PATH); dlopen'd by ORT's TensorRT provider.
       - libcudla-12-6
       - libcudnn9-cuda-12
       - tensorrt-libs
-      # NOTE: the Tegra driver shims (libcuda, libnvcudla, libnvdla_*, libnvrm_*,
-      # libnvcucompat, libnvsciipc, ...) are staged separately by the gpu-driver
-      # part below (from the PPA); only the CUDA/cuDNN/TensorRT compute libs are
-      # staged here from NVIDIA's Jetson repos.
     build-packages:
       - python3-pip
     # colcon builds the ROS package; then install the Python inference
     # deps into the Debian dist-packages path.
-    #onnxruntime comes from the Jetson AI Lab index (cp310 /
-    # Python 3.10 / aarch64 / CUDA 12.6) -- the only prebuilt aarch64 ORT-gpu
-    # wheels. core22's Python is 3.10, so this wheel is ABI-compatible.
     override-build: |
       craftctl default
       pip3 install \
@@ -158,20 +139,15 @@ parts:
   # Prebuilt TensorRT engine cache shipped read-only and seeded into
   # $SNAP_COMMON/trt_engines on first run, so a matching device skips the engine
   # build. ORT rebuilds automatically if it doesn't match (GPU / TensorRT
-  # version / model / precision). Regenerate ./prebuilt_engines/ when those
-  # change.
+  # version / model / precision).
   prebuilt-engine:
     plugin: dump
     source: prebuilt_engines
     organize:
       "*": prebuilt_engines/
 
-  # Tegra driver shims from the ubuntu-tegra PPA, pinned to this device's kernel
-  # nvgpu driver version. These MUST match the running kernel driver -- a skew
-  # shows up at runtime as "chip Id=0" / NvRmGpuLibOpen failure, not a missing
-  # library. Bump TEGRA_VER to match `dpkg-query -W nvidia-tegra-drivers-36-igpu-cuda`
-  # if the device driver updates. Pruned to the shim allowlist (do NOT stage the
-  # full driver: its compute-core libs would shadow opengl's host-injected copies).
+  # Tegra GPU driver user-space shims
+  # sourced directly from NVIDIA's own Jetson apt repo.
   gpu-driver:
     plugin: nil
     stage-packages:
