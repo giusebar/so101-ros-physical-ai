@@ -42,22 +42,19 @@ architectures:
 package-repositories:
   - type: apt
     components: [main]
-    suites: [r36.4]
+    suites: [r36.5]
     key-id: 3C6D1FF3100C8C3ABB0869C0E6543461A9996195
     key-server: https://repo.download.nvidia.com/jetson/jetson-ota-public.asc
     url: https://repo.download.nvidia.com/jetson/t234
     architectures: [arm64]
   - type: apt
     components: [main]
-    suites: [r36.4]
+    suites: [r36.5]
     key-id: 3C6D1FF3100C8C3ABB0869C0E6543461A9996195
     key-server: https://repo.download.nvidia.com/jetson/jetson-ota-public.asc
     url: https://repo.download.nvidia.com/jetson/common
     architectures: [arm64]
-  # Canonical ubuntu-tegra PPA: source of the Tegra driver shims that must match
-  # this device's kernel nvgpu driver (see the gpu-driver part).
-  - type: apt
-    ppa: ubuntu-tegra/updates
+
 
 apps:
   perception:
@@ -94,7 +91,7 @@ parts:
       - liblapack3
       - libblas3
       # CUDA / cuDNN / TensorRT runtime for the TensorRT execution provider.
-      # Versions track JetPack 6.x r36.4 (CUDA 12.6, cuDNN 9.3, TensorRT
+      # Versions track JetPack 6.x r36.5 (CUDA 12.6, cuDNN 9.3, TensorRT
       # 10.3); verified present in the JetPack repos above. tensorrt-libs is
       # the runtime meta-package pulling libnvinfer10 + plugin + onnx parser.
       - cuda-cudart-12-6
@@ -177,28 +174,7 @@ parts:
   # full driver: its compute-core libs would shadow opengl's host-injected copies).
   gpu-driver:
     plugin: nil
-    override-build: |
-      set -eux
-      TEGRA_VER="36.5.20260115-0ubuntu1"
-      pkgs="nvidia-tegra-drivers-36-igpu-cuda nvidia-tegra-drivers-36-graphic nvidia-tegra-drivers-36-nvsci"
-      workdir="${CRAFT_PART_BUILD}/debs"
-      rm -rf "${workdir}"; mkdir -p "${workdir}"
-      cd "${workdir}"
-      for p in ${pkgs}; do
-        apt-get download "${p}=${TEGRA_VER}"
-      done
-      mkdir -p "${workdir}/x"
-      for d in *.deb; do dpkg-deb -x "${d}" "${workdir}/x"; done
-      src="${workdir}/x/usr/lib/aarch64-linux-gnu/nvidia"
-      dest="${CRAFT_PART_INSTALL}/usr/lib/aarch64-linux-gnu/nvidia"
-      mkdir -p "${dest}"
-      shims="libcuda libnvcucompat libnvcudla libnvdla_compiler libnvdla_runtime \
-             libnvos libnvrm_chip libnvrm_gpu libnvrm_host1x libnvrm_mem \
-             libnvrm_sync libnvsciipc libnvsocsys libnvtegrahv"
-      for base in ${shims}; do
-        cp -a "${src}/${base}.so"* "${dest}/" 2>/dev/null || true
-      done
-      for lib in libcuda.so.1 libnvcudla.so libnvcucompat.so libnvsciipc.so libnvdla_compiler.so; do
-        test -e "${dest}/${lib}" || { echo "MISSING driver shim: ${lib}" >&2; exit 1; }
-      done
-      echo "Staged Tegra driver shims ($(ls "${dest}" | wc -l) files, $(du -sh "${dest}" | cut -f1))"
+    stage-packages:
+      - nvidia-l4t-core
+      - nvidia-l4t-cuda
+      - nvidia-l4t-dla-compiler
