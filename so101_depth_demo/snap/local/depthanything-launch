@@ -1,15 +1,16 @@
 #!/bin/bash
 # snap/local/depthanything-launch
 #
-# Entry point for the `perception` daemon app (NVIDIA / Jetson variant).
-# Identical to the CPU variant's launcher, plus:
-#   * LD_LIBRARY_PATH already carries CUDA / TensorRT / Tegra (set in the
-#     app's environment in snapcraft.yaml); here we only add the
-#     lapack/blas dirs (cv2) which are NOT on the default search path.
-#   * Ensures the TensorRT engine cache dir exists (ORT builds the engine
-#     on first run, which can take ~1-2 minutes on-device).
+# Entry point for the `perception` daemon app (Qualcomm / QNN variant).
+#   * LD_LIBRARY_PATH already carries the QNN backend libs ($SNAP/usr/lib) and
+#     the Adreno OpenCL driver ($SNAP/usr/lib/aarch64-linux-gnu), set in the
+#     app's environment in snapcraft.yaml; here we prepend the lapack/blas
+#     dirs (cv2) which are NOT on the default search path.
+#   * ONNX Runtime's QNNExecutionProvider dispatches to the Adreno GPU via
+#     the QNN GPU backend (qnn-backend-path=libQnnGpu.so, resolved on
+#     LD_LIBRARY_PATH), talking to /dev/kgsl-3d0 (custom-device interface).
 #
-# Runs inside the ros2-humble extension's command-chain, so the ROS 2
+# Runs inside the ros2-jazzy extension's command-chain, so the ROS 2
 # environment is already sourced and depth_anything_node is on PATH.
 set -eu
 
@@ -18,13 +19,25 @@ RUNTIME_ENV="$SNAP_DATA/runtime.env"
 DEPTH_ANYTHING_NODE_EXE="$SNAP/opt/ros/snap/lib/so101_depth_demo/depth_anything_node"
 
 # opencv-python-headless (cv2) dlopen()s liblapack.so.3/libblas.so.3 at
-# runtime; the debs install those under usr/lib/<triplet>/lapack|blas/,
-# which isn't on the default library search path (aarch64 on Jetson).
+# runtime; the debs install those under usr/lib/<triplet>/lapack|blas/, which
+# isn't on the default library search path.
 export LD_LIBRARY_PATH="$SNAP/usr/lib/aarch64-linux-gnu/lapack:$SNAP/usr/lib/aarch64-linux-gnu/blas:${LD_LIBRARY_PATH:-}"
 
+# QNN HTP (Hexagon NPU) backend: the DSP loader searches ADSP_LIBRARY_PATH for
+# the on-DSP skel (libQnnHtpV*Skel.so), which the onnxruntime-qnn wheel ships
+# alongside its provider library. Point it there.
+export ADSP_LIBRARY_PATH="$SNAP/usr/lib/python3/dist-packages/onnxruntime_qnn"
+
+# QNN needs a writable, per-instance scratch dir. Point HOME/TMPDIR into
+# $SNAP_DATA so the QNN backend can create its temp working files under strict
+# confinement (the real $HOME is not writable / not present).
+export HOME="$SNAP_DATA"
+export TMPDIR="${TMPDIR:-$SNAP_DATA/tmp}"
+mkdir -p "$TMPDIR"
+
 if [ ! -f "$PARAMS_FILE" ]; then
-  echo "depthanything (nvidia): no configuration found yet at $PARAMS_FILE" >&2
-  echo "depthanything (nvidia): the configure hook should have created this on install" >&2
+  echo "ai-vision-ros2 (qualcomm depth): no configuration found yet at $PARAMS_FILE" >&2
+  echo "ai-vision-ros2 (qualcomm depth): the configure hook should have created this on install" >&2
   exit 1
 fi
 
@@ -42,21 +55,6 @@ case "${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}" in
     ;;
 esac
 
-# Make sure the TensorRT engine cache dir exists before ORT tries to use it.
-# Default in $SNAP_COMMON (shared across revisions/channels) so engines survive
-# refreshes / channel swaps and are only built once each.
-ENGINE_CACHE_DIR="${ORT_ENGINE_CACHE_DIR:-$SNAP_COMMON/trt_engines}"
-mkdir -p "$ENGINE_CACHE_DIR"
-
-# Seed the bundled prebuilt engine(s) on first run so a matching device skips
-# the ~1-2 min build. -n (no-clobber) means a locally-rebuilt engine always
-# wins, and ORT validates each cached engine and rebuilds automatically if it
-# doesn't match this device's GPU / TensorRT version / model / precision -- so
-# a stale bundled engine is harmless.
-if [ -d "$SNAP/prebuilt_engines" ]; then
-  cp -an "$SNAP/prebuilt_engines/." "$ENGINE_CACHE_DIR/" 2>/dev/null || true
-fi
-
 set -- "$DEPTH_ANYTHING_NODE_EXE" --ros-args --params-file "$PARAMS_FILE"
 
 if [ -n "${NODE_NAME:-}" ]; then
@@ -67,5 +65,5 @@ if [ -n "${NAMESPACE:-}" ]; then
   set -- "$@" -r __ns:="$NAMESPACE"
 fi
 
-echo "depthanything (nvidia): exec: $*" >&2
+echo "ai-vision-ros2 (qualcomm depth): exec: $*" >&2
 exec "$@"

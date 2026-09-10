@@ -2,10 +2,10 @@
 # snap/hooks/configure
 #
 # Applies `snap set ai-vision-ros2 <key>=<value>` configuration for the
-# NVIDIA / Jetson depth variant. Mirrors the CPU variant's configure hook
-# and adds the NVIDIA-specific execution-providers / engine-cache-dir keys.
-# Renders $SNAP_DATA/params.yaml (ros__parameters for depth_anything_node)
-# and $SNAP_DATA/runtime.env (namespace/node-name/DDS overrides).
+# Qualcomm / QNN depth variant. Mirrors the CPU variant's configure hook and
+# adds the QNN execution-providers / backend keys. Renders
+# $SNAP_DATA/params.yaml (ros__parameters for depth_anything_node) and
+# $SNAP_DATA/runtime.env (namespace/node-name/DDS overrides).
 set -e
 
 get() {
@@ -21,33 +21,68 @@ get_number() {
   val="$(get "$1" "$2")"
   case "$val" in
     ''|*[!0-9.-]*)
-      echo "ai-vision-ros2 (nvidia depth): invalid number for $1: '$val'" >&2
+      echo "ai-vision-ros2 (qualcomm depth): invalid number for $1: '$val'" >&2
       exit 1
       ;;
   esac
   printf '%s' "$val"
 }
 
-MODEL_PATH="$SNAP/models/depth_anything_v2_small.onnx"
+# ── Model selection ─────────────────────────────────────────────────────────
+# `model` picks which bundled model + its matching pre/post-processing:
+#   default : HuggingFace fp32 DepthAnything V2 Small, 308x308, ImageNet norm
+#             outside the graph. Runs partly on the NPU.
+#   aihub   : Qualcomm AI-Hub w8a16 model, 518x518, quantised uint16 I/O,
+#             normalisation baked in. Runs FULLY on the Hexagon NPU.
+# Individual keys below (model-path, model-input-size, input-normalization,
+# input-quant-scale, ...) still override the per-variant defaults if set.
+MODEL_VARIANT="$(get model default)"
+case "$MODEL_VARIANT" in
+  aihub|qualcomm|qnn|w8a16)
+    DEF_MODEL_PATH="$SNAP/models/aihub/depth_anything_v2.onnx"
+    DEF_INPUT_SIZE=518
+    DEF_NORMALIZATION="unit"
+    DEF_IN_QUANT_SCALE="0.00002101432801282499"
+    DEF_IN_QUANT_ZP=9979
+    DEF_OUT_DEQUANT_SCALE="0.00020078796660527587"
+    DEF_OUT_DEQUANT_ZP=0
+    ;;
+  *)
+    DEF_MODEL_PATH="$SNAP/models/depth_anything_v2_small.onnx"
+    DEF_INPUT_SIZE=308
+    DEF_NORMALIZATION="imagenet"
+    DEF_IN_QUANT_SCALE="0.0"
+    DEF_IN_QUANT_ZP=0
+    DEF_OUT_DEQUANT_SCALE="0.0"
+    DEF_OUT_DEQUANT_ZP=0
+    ;;
+esac
+MODEL_PATH="$(get model-path "$DEF_MODEL_PATH")"
 
 INPUT_IMAGE_TOPIC="$(get input-image-topic /static_camera/image_raw)"
 OUTPUT_IMAGE_TOPIC="$(get output-image-topic /camera/depth/visualization)"
 OUTPUT_DEPTH_TOPIC="$(get output-depth-topic /perception/depth)"
-MODEL_INPUT_SIZE="$(get_number model-input-size 308)"
+MODEL_INPUT_SIZE="$(get_number model-input-size "$DEF_INPUT_SIZE")"
+INPUT_NORMALIZATION="$(get input-normalization "$DEF_NORMALIZATION")"
+INPUT_QUANT_SCALE="$(get_number input-quant-scale "$DEF_IN_QUANT_SCALE")"
+INPUT_QUANT_ZERO_POINT="$(get_number input-quant-zero-point "$DEF_IN_QUANT_ZP")"
+OUTPUT_DEQUANT_SCALE="$(get_number output-dequant-scale "$DEF_OUT_DEQUANT_SCALE")"
+OUTPUT_DEQUANT_ZERO_POINT="$(get_number output-dequant-zero-point "$DEF_OUT_DEQUANT_ZP")"
 PUBLISH_WIDTH="$(get_number publish-width 256)"
 PUBLISH_HEIGHT="$(get_number publish-height 256)"
 MIN_PERIOD_S="$(get_number min-period-s 0.0)"
 INTRA_OP_THREADS="$(get_number intra-op-threads 4)"
+LOG_SEVERITY_LEVEL="$(get_number log-severity-level 2)"
 
-# ── NVIDIA / execution-provider selection ───────────────────────────────────
+# ── QNN / execution-provider selection ──────────────────────────────────────
 # Comma-separated ORT providers in priority order. Default runs the depth
-# model on the Jetson GPU via TensorRT (fp16), falling back to CUDA then CPU.
-# ORT builds + caches the TensorRT engine under engine-cache-dir on first run.
-# Default cache lives in $SNAP_COMMON (shared across all revisions/channels,
-# not copied on refresh) so each model's engine is built once ever and channel
-# swaps reuse it instead of rebuilding.
-EXECUTION_PROVIDERS="$(get execution-providers "TensorrtExecutionProvider,CUDAExecutionProvider,CPUExecutionProvider")"
-ENGINE_CACHE_DIR="$(get engine-cache-dir "$SNAP_COMMON/trt_engines")"
+# model on the Qualcomm Hexagon NPU via the QNN HTP backend, falling back to
+# CPU for unsupported nodes. qnn-backend-path selects the QNN accelerator:
+#   htp = Hexagon NPU (default, ~12x faster than CPU on this board)
+#   gpu = Adreno GPU (works but slower than CPU for this fp32 model)
+#   cpu = QNN reference CPU
+EXECUTION_PROVIDERS="$(get execution-providers "QNNExecutionProvider,CPUExecutionProvider")"
+QNN_BACKEND_PATH="$(get qnn-backend-path "htp")"
 
 # Protective-stop trigger logic (ROI proximity + hysteresis debounce),
 # computed directly by depth_anything_node itself.
@@ -65,7 +100,6 @@ ROS_DOMAIN_ID="$(get ros-domain-id "")"
 RMW_IMPLEMENTATION="$(get rmw-implementation "")"
 
 mkdir -p "$SNAP_DATA"
-mkdir -p "$ENGINE_CACHE_DIR"
 
 # Convert the comma-separated provider list into a YAML flow list of quoted
 # strings: "A,B,C" -> ["A", "B", "C"]
@@ -87,12 +121,18 @@ PROVIDERS_YAML="$(printf '%s' "$EXECUTION_PROVIDERS" | awk -F',' '{
   echo "    output_image_topic: \"$OUTPUT_IMAGE_TOPIC\""
   echo "    output_depth_topic: \"$OUTPUT_DEPTH_TOPIC\""
   echo "    model_input_size: $MODEL_INPUT_SIZE"
+  echo "    input_normalization: \"$INPUT_NORMALIZATION\""
+  echo "    input_quant_scale: $INPUT_QUANT_SCALE"
+  echo "    input_quant_zero_point: $INPUT_QUANT_ZERO_POINT"
+  echo "    output_dequant_scale: $OUTPUT_DEQUANT_SCALE"
+  echo "    output_dequant_zero_point: $OUTPUT_DEQUANT_ZERO_POINT"
   echo "    publish_width: $PUBLISH_WIDTH"
   echo "    publish_height: $PUBLISH_HEIGHT"
   echo "    min_period_s: $MIN_PERIOD_S"
   echo "    intra_op_threads: $INTRA_OP_THREADS"
+  echo "    log_severity_level: $LOG_SEVERITY_LEVEL"
   echo "    execution_providers: $PROVIDERS_YAML"
-  echo "    engine_cache_dir: \"$ENGINE_CACHE_DIR\""
+  echo "    qnn_backend_path: \"$QNN_BACKEND_PATH\""
   echo "    stop_topic: \"$STOP_TOPIC\""
   echo "    roi: \"$ROI\""
   echo "    near_threshold: $NEAR_THRESHOLD"
@@ -107,7 +147,6 @@ PROVIDERS_YAML="$(printf '%s' "$EXECUTION_PROVIDERS" | awk -F',' '{
   [ -n "$NODE_NAME" ] && echo "NODE_NAME=\"$NODE_NAME\""
   [ -n "$ROS_DOMAIN_ID" ] && echo "ROS_DOMAIN_ID=\"$ROS_DOMAIN_ID\""
   [ -n "$RMW_IMPLEMENTATION" ] && echo "RMW_IMPLEMENTATION=\"$RMW_IMPLEMENTATION\""
-  echo "ORT_ENGINE_CACHE_DIR=\"$ENGINE_CACHE_DIR\""
   true
 } > "$SNAP_DATA/runtime.env"
 

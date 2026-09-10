@@ -1,23 +1,30 @@
 name: ai-vision-ros2
-base: core22
-version: '1.0.0-depth-nvidia'
-summary: Depth Anything V2 depth visualisation, NVIDIA Jetson TensorRT (ROS 2 Humble)
+base: core24
+version: '1.0.0-depth-qualcomm'
+summary: Depth Anything V2 on Qualcomm Hexagon NPU / QNN (ROS 2 Jazzy)
 description: |
-  GPU monocular depth visualisation for the SO-101 arm, on an NVIDIA Jetson
-  (Orin, JetPack 6.x). Subscribes to a ROS 2 image topic, runs Depth Anything
-  V2 (Small) with ONNX Runtime's TensorRT execution provider, and republishes
+  Accelerated monocular depth visualisation for the SO-101 arm, on a Qualcomm
+  IQ-9075 EVK (or similar QRB/Snapdragon board running the Ubuntu-on-Qualcomm
+  IoT stack). Subscribes to a ROS 2 image topic, runs Depth Anything V2 (Small)
+  with ONNX Runtime's QNN execution provider on the Hexagon NPU, and republishes
   a colorised relative-depth image (for viewing, with the safety ROI/trigger
   overlaid), a raw normalised depth map (32FC1, for other machine consumers),
   and a std_msgs/Bool protective-stop signal computed directly by this node
   (ROI proximity + hysteresis debounce).
 
-  This is the NVIDIA variant of the "ai-vision-ros2" snap, published on the
-  latest/nvidia/* channels. It is the Jetson counterpart to the CPU variant on
-  latest/stable (depth, so101_depth_demo) and latest/edge (YOLO person
-  detection, so101_yolo_demo) -- same snap name, same `perception` service,
+  This is the Qualcomm variant of the "ai-vision-ros2" snap, published on the
+  latest/qualcomm/* channels. It is the Qualcomm counterpart to the CPU variant
+  on latest/stable (depth, so101_depth_demo) and the NVIDIA/Jetson variant on
+  latest/nvidia/* (TensorRT) -- same snap name, same `perception` service,
   same `snap set` keys, so the channel-swap story is preserved per
-  architecture. The TensorRT engine is built and cached ON-DEVICE by ONNX
-  Runtime on first run (no separate model snap / content interface).
+  architecture.
+
+  ONNX Runtime's QNNExecutionProvider dispatches inference to the Hexagon NPU
+  (HTP backend) over fastrpc, ~12x faster than CPU, falling back to CPU for
+  unsupported nodes. The Adreno GPU backend is selectable (qnn-backend-path=gpu)
+  but is slower than CPU for this fp32 model. The bundled onnxruntime-qnn
+  (QAIRT 2.46) is version-matched to the board's on-device Qualcomm SDK, and the
+  model's input shape is fixed at build time so QNN can finalise the graph.
 
   Runs as an always-on daemon. Configure with `snap set`, e.g.:
 
@@ -25,58 +32,84 @@ description: |
       snap set ai-vision-ros2 output-image-topic=/camera/depth/visualization
       snap set ai-vision-ros2 output-depth-topic=/perception/depth
 
-  Requires JetPack 6.x on the target and the GPU interfaces connected (see
-  docs/ai_vision_ros2_nvidia.md). Check status with
+  Requires the Ubuntu-on-Qualcomm IoT stack on the target and the custom-device
+  interface connected for NPU (fastrpc) access. Check status with
   `snap services ai-vision-ros2` / `snap logs ai-vision-ros2`.
 
 grade: stable
 confinement: strict
 compression: lzo
 
-architectures:
-  - build-on: [arm64]
+platforms:
+  arm64:
+    build-on: [arm64]
     build-for: [arm64]
 
-# JetPack 6.x (L4T r36.x) userspace libraries. The snap gets its CUDA / cuDNN
-# / TensorRT runtime from NVIDIA's repos (matching the on-device JetPack).
+# Qualcomm IoT PPA: provides the QNN SDK runtime libraries (qairt-libs) and the
+# Adreno OpenCL userspace driver (qcom-adreno1), matching the on-device stack.
 package-repositories:
   - type: apt
+    formats: [deb]
     components: [main]
-    suites: [r36.5]
-    key-id: 3C6D1FF3100C8C3ABB0869C0E6543461A9996195
-    key-server: https://repo.download.nvidia.com/jetson/jetson-ota-public.asc
-    url: https://repo.download.nvidia.com/jetson/t234
-    architectures: [arm64]
-  - type: apt
-    components: [main]
-    suites: [r36.5]
-    key-id: 3C6D1FF3100C8C3ABB0869C0E6543461A9996195
-    key-server: https://repo.download.nvidia.com/jetson/jetson-ota-public.asc
-    url: https://repo.download.nvidia.com/jetson/common
+    suites: [noble]
+    key-id: 33EF0ACBC6FE252590ABBAF21C70EB0C444248D7
+    key-server: keyserver.ubuntu.com
+    url: https://ppa.launchpadcontent.net/ubuntu-qcom-iot/qcom-ppa/ubuntu
     architectures: [arm64]
 
+# Provider side: a custom-device slot naming the Qualcomm accelerator nodes.
+# custom-device's UDevConnectedPlug udev-tags the device nodes, which is what
+# the mandatory core24 device cgroup requires (system-files/hardware-observe
+# cannot do this). /dev/fastrpc-cdsp (Hexagon DSP / NPU fastrpc channel) is the
+# node the HTP backend needs -- it is owned fastrpc:fastrpc with others=r, and
+# the confined root daemon opens it O_RDONLY (which libcdsprpc uses), so no
+# udev/permission change is required. /dev/kgsl-3d0 (Adreno GPU) is kept for
+# the optional GPU backend.
+slots:
+  qcom-accel:
+    interface: custom-device
+    custom-device: qcom-accel
+    devices:
+      - /dev/kgsl-3d0
+      - /dev/fastrpc-cdsp
+      - /dev/fastrpc-cdsp1
+    files:
+      read:
+        - /sys/class/kgsl/kgsl-3d0/gpu_busy_percentage
+        - /sys/class/kgsl/kgsl-3d0/gpuclk
+
+plugs:
+  qcom-accel-plug:
+    interface: custom-device
+    custom-device: qcom-accel
 
 apps:
   perception:
-    extensions: [ros2-humble-ros-base]
+    extensions: [ros2-jazzy-ros-base]
     command: usr/bin/depthanything-launch
     daemon: simple
     install-mode: disable
     restart-condition: on-failure
     restart-delay: 5s
     environment:
-      LD_LIBRARY_PATH: "$SNAP/usr/lib/aarch64-linux-gnu/nvidia:/var/lib/snapd/lib/gl:/var/lib/snapd/lib/gl32:$SNAP/usr/local/cuda-12.6/targets/aarch64-linux/lib:$SNAP/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
-      # Default TensorRT engine cache (overridable via engine-cache-dir).
-      ORT_ENGINE_CACHE_DIR: $SNAP_COMMON/trt_engines
+      # fastrpc userspace (libcdsprpc.so, dlopen'd by libQnnHtp.so to reach the
+      # Hexagon DSP) and the Adreno OpenCL driver live in the multiarch dir;
+      # lapack/blas (cv2) subdirs are prepended by the launcher. The QNN
+      # provider + backend libs (incl. the Hexagon skels) ship inside the
+      # onnxruntime-qnn wheel; ADSP_LIBRARY_PATH (set in the launcher) points
+      # the DSP loader at them.
+      LD_LIBRARY_PATH: "$SNAP/usr/lib:$SNAP/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
     plugs:
       - network
       - network-bind
       - hardware-observe
       - opengl
-      - kernel-module-observe
+      - qcom-accel-plug
 
 hooks:
-  configure: {}
+  configure:
+    plugs:
+      - qcom-accel-plug
 
 parts:
   depth-demo:
@@ -86,16 +119,15 @@ parts:
       - libgomp1
       - liblapack3
       - libblas3
-      - cuda-cudart-12-6
-      - libcublas-12-6
-      - libcufft-12-6
-      - libcudla-12-6
-      - libcudnn9-cuda-12
-      - tensorrt-libs
     build-packages:
       - python3-pip
-    # colcon builds the ROS package; then install the Python inference
-    # deps into the Debian dist-packages path.
+    # colcon builds the ROS package; then install the Python inference deps
+    # (ONNX Runtime with the QNN plugin execution provider) into the Debian
+    # dist-packages path. Versions are PINNED: onnxruntime-qnn 2.2.0 bundles
+    # QAIRT 2.46, which matches the on-device Qualcomm SDK (qairt-*/qcom-* debs)
+    # on this board -- a mismatched QAIRT (e.g. the newer 2.5.0/QAIRT-2.49
+    # wheel) makes the QNN backend reject this SoC ("unsupported platform").
+    # cp312 aarch64 (manylinux_2_34) -> requires core24's Python 3.12.
     override-build: |
       craftctl default
       pip3 install \
@@ -103,31 +135,82 @@ parts:
         --no-compile \
         --target="${CRAFT_PART_INSTALL}/usr/lib/python3/dist-packages" \
         "numpy" \
-        "opencv-python-headless"
-      pip3 install \
-        --ignore-installed \
-        --no-compile \
-        --target="${CRAFT_PART_INSTALL}/usr/lib/python3/dist-packages" \
-        "https://pypi.jetson-ai-lab.io/jp6/cu126/+f/d98/0b934b9a29c1a/onnxruntime_gpu-1.24.0-cp310-cp310-linux_aarch64.whl#sha256=d980b934b9a29c1a9d6f39751edd7662b69fadd75556a10ff363773a58ce0950"
+        "opencv-python-headless" \
+        "onnxruntime==1.24.4" \
+        "onnxruntime-qnn==2.2.0"
 
-  # Model weights bundled directly into this snap.
+  # The onnxruntime-qnn wheel (installed in the depth-demo part) already ships
+  # the QNN provider library AND the QNN backend libs (libQnnHtp + Hexagon
+  # skels, libQnnGpu, ...). At runtime libQnnHtp.so dlopen()s the fastrpc
+  # userspace driver to reach the Hexagon DSP -- that lib (libcdsprpc.so, from
+  # qcom-fastrpc1) is NOT in the wheel and must be staged from the Qualcomm IoT
+  # PPA so it matches the on-device DSP. qcom-fastrpc-dev provides the
+  # unversioned .so symlink some loaders look for.
+  qnn-runtime:
+    plugin: nil
+    stage-packages:
+      - qcom-fastrpc1
+      - qcom-fastrpc-dev
+
+  # Model weights bundled directly into this snap. The upstream ONNX has fully
+  # dynamic input dims (batch, height, width); QNN cannot finalise a dynamic
+  # graph, so we FIX the input to 1x3x308x308 at build time (308 = model_input_
+  # size, a multiple of 14). The Qualcomm QNN backend needs this static shape.
   model:
     plugin: nil
     build-packages:
       - curl
       - ca-certificates
+      - python3-pip
+      - python3-venv
     override-build: |
       set -eux
       mkdir -p "${CRAFT_PART_INSTALL}/models"
-      model="${CRAFT_PART_INSTALL}/models/depth_anything_v2_small.onnx"
+      raw="${CRAFT_PART_BUILD}/model_dynamic.onnx"
       curl -fL --retry 5 --retry-delay 2 \
         "https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/main/onnx/model.onnx?download=true" \
-        -o "${model}"
-      test -s "${model}"
-      size=$(stat -c%s "${model}")
+        -o "${raw}"
+      test -s "${raw}"
+      size=$(stat -c%s "${raw}")
       test "${size}" -gt 1000000 || { echo "Model too small (${size} bytes)" >&2; exit 1; }
-      first=$(head -c 1 "${model}")
+      first=$(head -c 1 "${raw}")
       test "${first}" != "<" || { echo "Downloaded an HTML error page, not the model" >&2; exit 1; }
+      # Fix dynamic input dims -> static 1x3x308x308 so QNN can finalise.
+      python3 -m venv "${CRAFT_PART_BUILD}/fixvenv"
+      "${CRAFT_PART_BUILD}/fixvenv/bin/pip" install --quiet onnx onnxruntime
+      "${CRAFT_PART_BUILD}/fixvenv/bin/python" -m onnxruntime.tools.make_dynamic_shape_fixed \
+        --input_name pixel_values --input_shape 1,3,308,308 \
+        "${raw}" "${CRAFT_PART_INSTALL}/models/depth_anything_v2_small.onnx"
+      test -s "${CRAFT_PART_INSTALL}/models/depth_anything_v2_small.onnx"
+
+  # Qualcomm AI-Hub optimised model (optional, selected via `snap set model=aihub`).
+  # DepthAnything V2 Small, w8a16-quantised and validated for the Hexagon NPU on
+  # the IQ-9075 (runs FULLY on the HTP, no CPU fallback). Same MIT-licensed
+  # checkpoint as the default model, exported at native 518x518 with static
+  # shapes and quantised uint16 I/O (the node dequantises). Publicly downloadable
+  # (no AI-Hub account needed). Ships the .onnx, external .data weights and the
+  # metadata.json (quantisation params) under models/aihub/.
+  aihub-model:
+    plugin: nil
+    build-packages:
+      - curl
+      - ca-certificates
+      - unzip
+    override-build: |
+      set -eux
+      dst="${CRAFT_PART_INSTALL}/models/aihub"
+      mkdir -p "${dst}"
+      zip="${CRAFT_PART_BUILD}/aihub.zip"
+      curl -fL --retry 5 --retry-delay 2 \
+        "https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/depth_anything_v2/releases/v0.62.1/depth_anything_v2-onnx-w8a16.zip" \
+        -o "${zip}"
+      test -s "${zip}"
+      unzip -o "${zip}" -d "${CRAFT_PART_BUILD}/aihub_extract"
+      src="${CRAFT_PART_BUILD}/aihub_extract/depth_anything_v2-onnx-w8a16"
+      cp "${src}/depth_anything_v2.onnx" "${src}/depth_anything_v2.data" \
+         "${src}/metadata.json" "${dst}/"
+      test -s "${dst}/depth_anything_v2.onnx"
+      test -s "${dst}/depth_anything_v2.data"
 
   launcher:
     plugin: dump
@@ -135,22 +218,3 @@ parts:
     organize:
       depthanything-launch: usr/bin/depthanything-launch
       fastdds_no_shared_memory.xml: usr/share/
-
-  # Prebuilt TensorRT engine cache shipped read-only and seeded into
-  # $SNAP_COMMON/trt_engines on first run, so a matching device skips the engine
-  # build. ORT rebuilds automatically if it doesn't match (GPU / TensorRT
-  # version / model / precision).
-  prebuilt-engine:
-    plugin: dump
-    source: prebuilt_engines
-    organize:
-      "*": prebuilt_engines/
-
-  # Tegra GPU driver user-space shims
-  # sourced directly from NVIDIA's own Jetson apt repo.
-  gpu-driver:
-    plugin: nil
-    stage-packages:
-      - nvidia-l4t-core
-      - nvidia-l4t-cuda
-      - nvidia-l4t-dla-compiler
