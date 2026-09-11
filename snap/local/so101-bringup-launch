@@ -22,6 +22,8 @@ fi
 : "${FOLLOWER_USB_PORT:=/dev/so101_follower}"
 : "${HARDWARE_TYPE:=real}"
 : "${ARM_CONTROLLER_NAME:=arm_trajectory_controller}"
+: "${LEADER_JOINT_CONFIG_FILE:=}"
+: "${FOLLOWER_JOINT_CONFIG_FILE:=}"
 
 if [ -n "${ROS_DOMAIN_ID:-}" ]; then
   export ROS_DOMAIN_ID
@@ -31,10 +33,13 @@ if [ -n "${RMW_IMPLEMENTATION:-}" ]; then
 fi
 
 echo "so101-bringup: hardware_type=$HARDWARE_TYPE leader_usb_port=$LEADER_USB_PORT follower_usb_port=$FOLLOWER_USB_PORT arm_controller=$ARM_CONTROLLER_NAME" >&2
+echo "so101-bringup: leader_joint_config_file='${LEADER_JOINT_CONFIG_FILE}' follower_joint_config_file='${FOLLOWER_JOINT_CONFIG_FILE}'" >&2
 
 exec ros2 launch so101_bringup hardware_bringup.launch.py \
   hardware_type:="$HARDWARE_TYPE" \
   leader_usb_port:="$LEADER_USB_PORT" \
   follower_usb_port:="$FOLLOWER_USB_PORT" \
+  leader_joint_config_file:="$LEADER_JOINT_CONFIG_FILE" \
+  follower_joint_config_file:="$FOLLOWER_JOINT_CONFIG_FILE" \
   arm_controller:="$ARM_CONTROLLER_NAME" \
   use_rviz:=false

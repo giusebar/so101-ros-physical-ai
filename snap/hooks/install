@@ -1,0 +1,24 @@
+#!/bin/bash
+# snap/hooks/install
+#
+# Seed the managed, editable per-robot calibration files into $SNAP_COMMON.
+# Runs once at first install; idempotent (never overwrites an existing file,
+# so a refresh or a hand-edited calibration survives).
+set -e
+
+CAL_DIR="$SNAP_COMMON/calibration"
+mkdir -p "$CAL_DIR"
+
+BUNDLED="$SNAP/opt/ros/snap/share/so101_bringup/config/hardware"
+
+seed() {
+  # $1 = arm role (leader|follower), $2 = bundled source filename
+  src="$BUNDLED/$2"
+  dst="$CAL_DIR/$1.json"
+  if [ ! -f "$dst" ] && [ -f "$src" ]; then
+    cp "$src" "$dst"
+  fi
+}
+
+seed leader  lerobot_leader_arm.json
+seed follower lerobot_follower_arm.json

@@ -24,6 +24,31 @@ description: |
       snap set so101-bringup ros-domain-id=0
       snap set so101-bringup rmw-implementation=rmw_fastrtps_cpp
 
+  Calibration (LeRobot `calibrate` output, per physical arm). By default the
+  snap ships the calibration for the reference robot bundled inside
+  ($SNAP/opt/ros/snap/share/so101_bringup/config/hardware/lerobot_*.json). On
+  install a managed, editable copy is seeded into
+  $SNAP_COMMON/calibration/{leader,follower}.json; just edit those files
+  in place to adapt to a new robot, then `snap restart so101-bringup`.
+  Alternatively, copy your own calibration JSON into
+  $SNAP_COMMON/calibration/ and point the snap at it:
+
+      snap set so101-bringup leader-calibration-file=$SNAP_COMMON/calibration/my_leader.json
+      snap set so101-bringup follower-calibration-file=$SNAP_COMMON/calibration/my_follower.json
+
+  Paths must live under $SNAP_COMMON (strict confinement; no `home` plug).
+
+  The hardware daemon does NOT auto-start. Powering an arm on with a
+  not-yet-verified calibration can drive its joints to wrong positions, so
+  after confirming the active calibration matches this physical robot you must
+  start it explicitly (add `--enable` to also start it on every boot):
+
+      snap start so101-bringup.hardware   # or: snap start --enable ...
+
+  Reconfiguring via `snap set` re-validates the calibration and, only if the
+  daemon is already running, restarts it to apply the change; a stopped daemon
+  stays stopped.
+
   Requires raw USB access to the Feetech serial adapters (character device
   permissions still come from the host's udev rule, e.g.
   so101_bringup/udev/99-so101-serial.rules -- raw-usb only extends snapd's own
@@ -62,6 +87,7 @@ apps:
       - network-bind
 
 hooks:
+  install: {}
   configure: {}
 
 parts:
@@ -85,3 +111,4 @@ parts:
     source: snap/local
     organize:
       so101-bringup-launch: usr/bin/so101-bringup-launch
+      scripts/wrap_calibration.py: usr/bin/wrap_calibration.py
