@@ -46,6 +46,7 @@ case "$MODEL_VARIANT" in
     DEF_IN_QUANT_ZP=9979
     DEF_OUT_DEQUANT_SCALE="0.00020078796660527587"
     DEF_OUT_DEQUANT_ZP=0
+    DEF_CTX_CACHE="$SNAP_COMMON/qnn_ctx/depth_aihub_ctx.onnx"
     ;;
   *)
     DEF_MODEL_PATH="$SNAP/models/depth_anything_v2_small.onnx"
@@ -55,6 +56,7 @@ case "$MODEL_VARIANT" in
     DEF_IN_QUANT_ZP=0
     DEF_OUT_DEQUANT_SCALE="0.0"
     DEF_OUT_DEQUANT_ZP=0
+    DEF_CTX_CACHE="$SNAP_COMMON/qnn_ctx/depth_default_ctx.onnx"
     ;;
 esac
 MODEL_PATH="$(get model-path "$DEF_MODEL_PATH")"
@@ -83,6 +85,12 @@ LOG_SEVERITY_LEVEL="$(get_number log-severity-level 2)"
 #   cpu = QNN reference CPU
 EXECUTION_PROVIDERS="$(get execution-providers "QNNExecutionProvider,CPUExecutionProvider")"
 QNN_BACKEND_PATH="$(get qnn-backend-path "htp")"
+
+# EPContext (QNN context-binary) cache. Persisting the compiled HTP context in
+# writable $SNAP_COMMON turns the first-run graph compile (~12 s for the AI-Hub
+# model) into a ~0.3 s reload on every subsequent daemon start. One file per
+# bundled model (see DEF_CTX_CACHE above). Set to "" to disable.
+QNN_CONTEXT_CACHE_PATH="$(get qnn-context-cache-path "$DEF_CTX_CACHE")"
 
 # Protective-stop trigger logic (ROI proximity + hysteresis debounce),
 # computed directly by depth_anything_node itself.
@@ -133,6 +141,7 @@ PROVIDERS_YAML="$(printf '%s' "$EXECUTION_PROVIDERS" | awk -F',' '{
   echo "    log_severity_level: $LOG_SEVERITY_LEVEL"
   echo "    execution_providers: $PROVIDERS_YAML"
   echo "    qnn_backend_path: \"$QNN_BACKEND_PATH\""
+  echo "    qnn_context_cache_path: \"$QNN_CONTEXT_CACHE_PATH\""
   echo "    stop_topic: \"$STOP_TOPIC\""
   echo "    roi: \"$ROI\""
   echo "    near_threshold: $NEAR_THRESHOLD"

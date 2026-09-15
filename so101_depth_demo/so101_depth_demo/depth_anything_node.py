@@ -62,6 +62,11 @@ Parameters:
   qnn_backend_path    (string) QNN accelerator for QNNExecutionProvider:
                                "htp" (Hexagon NPU, default), "gpu" (Adreno) or
                                "cpu" (QNN reference); Qualcomm snap variant only
+  qnn_context_cache_path (string) EPContext cache file ("" = disabled). When set
+                               and a QNN htp/gpu backend is used, the compiled
+                               QNN context binary is cached here so restarts skip
+                               the graph compile (~12 s -> ~0.3 s). Snap points it
+                               at $SNAP_COMMON (one file per bundled model).
   stop_topic          (string) Bool protective-stop output (default /safety/protective_stop)
   roi                 (string) "x1,y1,x2,y2" normalised center ROI
   near_threshold      (float)  normalised depth [0,1] above which a pixel is near
@@ -160,6 +165,13 @@ class DepthAnythingNode(Node):
         # "QNNExecutionProvider" is requested (the Qualcomm ai-vision-ros2
         # variant). Kept named qnn_backend_path for config-key compatibility.
         self.declare_parameter("qnn_backend_path", "htp")
+        # EPContext (QNN context-binary) cache file ("" = disabled). When set and
+        # a QNN htp/gpu backend is used, the compiled QNN context binary is
+        # written here on the first run and reloaded on subsequent runs, turning
+        # the graph compile (~12 s for the AI-Hub model) into a ~0.3 s load. Must
+        # be a writable path (the snap points it at $SNAP_COMMON, one file per
+        # bundled model). Stale/incompatible caches are auto-regenerated.
+        self.declare_parameter("qnn_context_cache_path", "")
         # ONNX Runtime log severity: 0=Verbose 1=Info 2=Warning(default) 3=Error
         # 4=Fatal. Set to 0/1 to surface why an execution provider (e.g. QNN)
         # declines nodes or fails to initialise and falls back to CPU.
@@ -204,6 +216,7 @@ class DepthAnythingNode(Node):
         execution_providers = list(self.get_parameter("execution_providers").value)
         engine_cache_dir = str(self.get_parameter("engine_cache_dir").value)
         qnn_backend = str(self.get_parameter("qnn_backend_path").value)
+        self._qnn_ctx_cache = str(self.get_parameter("qnn_context_cache_path").value)
         self._normalization = str(
             self.get_parameter("input_normalization").value
         ).lower()
@@ -367,7 +380,39 @@ class DepthAnythingNode(Node):
             f"lib='{ort_qnn.get_library_path()}' "
             f"ADSP_LIBRARY_PATH='{os.environ.get('ADSP_LIBRARY_PATH', '<unset>')}'"
         )
-        # No providers= here: the QNN device was added to sess_opts, and the
+
+        # EPContext (QNN context-binary) caching. QNN compiles the graph to an
+        # HTP context binary on the first session creation (~12 s for the AI-Hub
+        # model); persisting it and reloading it later cuts that to ~0.3 s. Only
+        # meaningful for the accelerated backends (htp/gpu), not QNN reference CPU.
+        cache = self._qnn_ctx_cache
+        if cache and backend_type in ("htp", "gpu"):
+            if os.path.exists(cache):
+                try:
+                    self.get_logger().info(f"QNN: loading cached context '{cache}'")
+                    return ort.InferenceSession(cache, sess_options=sess_opts)
+                except Exception as exc:  # noqa: BLE001
+                    # Stale/incompatible cache (e.g. a QNN/QAIRT version change):
+                    # drop it and fall through to regenerate.
+                    self.get_logger().warn(
+                        f"QNN: cached context failed to load ({exc}); regenerating"
+                    )
+                    try:
+                        os.remove(cache)
+                    except OSError:
+                        pass
+            cache_dir = os.path.dirname(cache)
+            if cache_dir:
+                os.makedirs(cache_dir, exist_ok=True)
+            sess_opts.add_session_config_entry("ep.context_enable", "1")
+            sess_opts.add_session_config_entry("ep.context_file_path", cache)
+            sess_opts.add_session_config_entry("ep.context_embed_mode", "1")
+            self.get_logger().info(
+                f"QNN: compiling + caching context to '{cache}' (first run)"
+            )
+            return ort.InferenceSession(model_path, sess_options=sess_opts)
+
+        # No context caching: the QNN device was added to sess_opts, and the
         # built-in CPU EP is added automatically for any unsupported nodes.
         return ort.InferenceSession(model_path, sess_options=sess_opts)
 
