@@ -1,0 +1,73 @@
+#!/bin/bash
+# snap/local/owldetect-launch
+#
+# Entry point for the `perception` daemon app (Qualcomm / QNN OWL-ViT variant).
+#   * LD_LIBRARY_PATH already carries the QNN backend libs ($SNAP/usr/lib) and
+#     the fastrpc / Adreno drivers ($SNAP/usr/lib/aarch64-linux-gnu), set in the
+#     app's environment in snapcraft.yaml; here we prepend the lapack/blas dirs
+#     (cv2) which are NOT on the default search path.
+#   * ONNX Runtime's QNNExecutionProvider dispatches to the Hexagon NPU via the
+#     QNN HTP backend, talking to /dev/fastrpc-cdsp (custom-device interface).
+#
+# Runs inside the ros2-jazzy extension's command-chain, so the ROS 2
+# environment is already sourced and owl_detect_node is on PATH.
+set -eu
+
+PARAMS_FILE="$SNAP_DATA/params.yaml"
+RUNTIME_ENV="$SNAP_DATA/runtime.env"
+OWL_DETECT_NODE_EXE="$SNAP/opt/ros/snap/lib/so101_owl_demo/owl_detect_node"
+
+# opencv-python-headless (cv2) dlopen()s liblapack.so.3/libblas.so.3 at
+# runtime; the debs install those under usr/lib/<triplet>/lapack|blas/, which
+# isn't on the default library search path.
+export LD_LIBRARY_PATH="$SNAP/usr/lib/aarch64-linux-gnu/lapack:$SNAP/usr/lib/aarch64-linux-gnu/blas:${LD_LIBRARY_PATH:-}"
+
+# QNN HTP (Hexagon NPU) backend: the DSP loader searches ADSP_LIBRARY_PATH for
+# the on-DSP skel (libQnnHtpV*Skel.so), which the onnxruntime-qnn wheel ships
+# alongside its provider library. Point it there.
+export ADSP_LIBRARY_PATH="$SNAP/usr/lib/python3/dist-packages/onnxruntime_qnn"
+
+# QNN needs a writable, per-instance scratch dir. Point HOME/TMPDIR into
+# $SNAP_DATA so the QNN backend can create its temp working files under strict
+# confinement (the real $HOME is not writable / not present). Keep the
+# transformers/HF tokenizer strictly offline and cached under $SNAP_DATA.
+export HOME="$SNAP_DATA"
+export TMPDIR="${TMPDIR:-$SNAP_DATA/tmp}"
+export HF_HOME="$SNAP_DATA/hf"
+export TRANSFORMERS_OFFLINE=1
+export HF_HUB_OFFLINE=1
+export TOKENIZERS_PARALLELISM=false
+mkdir -p "$TMPDIR" "$HF_HOME"
+
+if [ ! -f "$PARAMS_FILE" ]; then
+  echo "ai-vision-ros2 (qualcomm owl): no configuration found yet at $PARAMS_FILE" >&2
+  echo "ai-vision-ros2 (qualcomm owl): the configure hook should have created this on install" >&2
+  exit 1
+fi
+
+# NAMESPACE, NODE_NAME, ROS_DOMAIN_ID, RMW_IMPLEMENTATION (all optional)
+if [ -f "$RUNTIME_ENV" ]; then
+  # shellcheck disable=SC1090
+  . "$RUNTIME_ENV"
+fi
+
+# Disable Fast DDS shared-memory transport (force UDP-only). SHM can't cross
+# strict-confinement sandboxes. Only meaningful for a Fast DDS RMW.
+case "${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}" in
+  rmw_fastrtps_*)
+    export FASTRTPS_DEFAULT_PROFILES_FILE="$SNAP/usr/share/fastdds_no_shared_memory.xml"
+    ;;
+esac
+
+set -- "$OWL_DETECT_NODE_EXE" --ros-args --params-file "$PARAMS_FILE"
+
+if [ -n "${NODE_NAME:-}" ]; then
+  set -- "$@" -r __node:="$NODE_NAME"
+fi
+
+if [ -n "${NAMESPACE:-}" ]; then
+  set -- "$@" -r __ns:="$NAMESPACE"
+fi
+
+echo "ai-vision-ros2 (qualcomm owl): exec: $*" >&2
+exec "$@"

@@ -1,0 +1,165 @@
+#!/bin/bash
+# snap/hooks/configure
+#
+# Applies `snap set ai-vision-ros2 <key>=<value>` configuration for the
+# Qualcomm / QNN OWL-ViT open-vocabulary detection variant. Renders
+# $SNAP_DATA/params.yaml (ros__parameters for owl_detect_node) and
+# $SNAP_DATA/runtime.env (namespace/node-name/DDS overrides).
+#
+# The `prompt` key is special: it is ALSO written to $SNAP_DATA/prompt.txt,
+# which the running node polls (prompt_file) and re-tokenises live. So a
+# prompt-only change takes effect WITHOUT a daemon restart (no ~model reload);
+# any other change still restarts the daemon below.
+set -e
+
+get() {
+  # $1 = key, $2 = default
+  val="$(snapctl get "$1")"
+  if [ -z "$val" ]; then
+    val="$2"
+  fi
+  printf '%s' "$val"
+}
+
+get_number() {
+  val="$(get "$1" "$2")"
+  case "$val" in
+    ''|*[!0-9.-]*)
+      echo "ai-vision-ros2 (qualcomm owl): invalid number for $1: '$val'" >&2
+      exit 1
+      ;;
+  esac
+  printf '%s' "$val"
+}
+
+MODEL_PATH="$(get model-path "$SNAP/models/owl_vit/owl_vit.onnx")"
+TOKENIZER_DIR="$(get tokenizer-dir "$SNAP/models/owl_vit/tokenizer")"
+INPUT_IMAGE_TOPIC="$(get input-image-topic /static_camera/image_raw)"
+OUTPUT_IMAGE_TOPIC="$(get output-image-topic /camera/detections/visualization)"
+OUTPUT_DETECTIONS_TOPIC="$(get output-detections-topic /perception/detections)"
+INPUT_SIZE="$(get_number input-size 768)"
+PROMPT="$(get prompt "a hand")"
+PROMPT_TOPIC="$(get prompt-topic /perception/prompt)"
+SCORE_THRESHOLD="$(get_number score-threshold 0.1)"
+IOU_THRESHOLD="$(get_number iou-threshold 0.3)"
+MAX_DETECTIONS="$(get_number max-detections 20)"
+MAX_TEXT_LEN="$(get_number max-text-len 16)"
+MIN_PERIOD_S="$(get_number min-period-s 0.0)"
+INTRA_OP_THREADS="$(get_number intra-op-threads 4)"
+LOG_SEVERITY_LEVEL="$(get_number log-severity-level 2)"
+
+# OWL-ViT AI-Hub w8a16 quantisation params (from the model metadata.json).
+INPUT_QUANT_SCALE="$(get input-quant-scale "0.00006009246135363355")"
+INPUT_QUANT_ZERO_POINT="$(get_number input-quant-zero-point 29825)"
+BOX_DEQUANT_SCALE="$(get box-dequant-scale "0.019158801063895226")"
+BOX_DEQUANT_ZERO_POINT="$(get_number box-dequant-zero-point 5775)"
+SCORE_DEQUANT_SCALE="$(get score-dequant-scale "0.000015199416338873561")"
+SCORE_DEQUANT_ZERO_POINT="$(get_number score-dequant-zero-point 0)"
+
+# ── QNN / execution-provider selection ──────────────────────────────────────
+# Comma-separated ORT providers in priority order. Default runs OWL-ViT on the
+# Qualcomm Hexagon NPU via the QNN HTP backend, falling back to CPU for
+# unsupported nodes. qnn-backend-path selects the QNN accelerator:
+#   htp = Hexagon NPU (default), gpu = Adreno, cpu = QNN reference CPU
+EXECUTION_PROVIDERS="$(get execution-providers "QNNExecutionProvider,CPUExecutionProvider")"
+QNN_BACKEND_PATH="$(get qnn-backend-path "htp")"
+
+# EPContext (QNN context-binary) cache. Persisting the compiled HTP context in
+# writable $SNAP_COMMON turns OWL-ViT's ~40 s first-run graph compile into a
+# ~1 s reload on every subsequent daemon start. Set to "" to disable.
+QNN_CONTEXT_CACHE_PATH="$(get qnn-context-cache-path "$SNAP_COMMON/qnn_ctx/owl_vit_ctx.onnx")"
+
+# Protective-stop trigger logic (ROI overlap + hysteresis debounce), computed
+# directly by owl_detect_node over the prompt-matched detections.
+STOP_TOPIC="$(get stop-topic /safety/protective_stop)"
+ROI="$(get roi "0.25,0.2,0.75,0.85")"
+MIN_OVERLAP_RATIO="$(get_number min-overlap-ratio 0.2)"
+FRAMES_TO_BLOCK="$(get_number frames-to-block 2)"
+FRAMES_TO_CLEAR="$(get_number frames-to-clear 3)"
+
+NAMESPACE="$(get namespace "")"
+NODE_NAME="$(get node-name "")"
+ROS_DOMAIN_ID="$(get ros-domain-id "")"
+RMW_IMPLEMENTATION="$(get rmw-implementation "")"
+
+mkdir -p "$SNAP_DATA"
+
+# Live-prompt file: written here, polled + re-tokenised by the running node.
+PROMPT_FILE="$SNAP_DATA/prompt.txt"
+printf '%s\n' "$PROMPT" > "$PROMPT_FILE"
+
+# Convert the comma-separated provider list into a YAML flow list of quoted
+# strings: "A,B,C" -> ["A", "B", "C"]
+PROVIDERS_YAML="$(printf '%s' "$EXECUTION_PROVIDERS" | awk -F',' '{
+  out="[";
+  for (i=1; i<=NF; i++) {
+    gsub(/^[ \t]+|[ \t]+$/, "", $i);
+    out = out (i>1 ? ", " : "") "\"" $i "\"";
+  }
+  out = out "]";
+  print out
+}')"
+
+# Escape any double quotes in the free-form prompt for safe YAML embedding.
+PROMPT_YAML="$(printf '%s' "$PROMPT" | sed 's/"/\\"/g')"
+
+{
+  echo "/**:"
+  echo "  ros__parameters:"
+  echo "    model_path: \"$MODEL_PATH\""
+  echo "    tokenizer_dir: \"$TOKENIZER_DIR\""
+  echo "    input_image_topic: \"$INPUT_IMAGE_TOPIC\""
+  echo "    output_image_topic: \"$OUTPUT_IMAGE_TOPIC\""
+  echo "    output_detections_topic: \"$OUTPUT_DETECTIONS_TOPIC\""
+  echo "    input_size: $INPUT_SIZE"
+  echo "    prompt: \"$PROMPT_YAML\""
+  echo "    prompt_topic: \"$PROMPT_TOPIC\""
+  echo "    prompt_file: \"$PROMPT_FILE\""
+  echo "    score_threshold: $SCORE_THRESHOLD"
+  echo "    iou_threshold: $IOU_THRESHOLD"
+  echo "    max_detections: $MAX_DETECTIONS"
+  echo "    max_text_len: $MAX_TEXT_LEN"
+  echo "    min_period_s: $MIN_PERIOD_S"
+  echo "    intra_op_threads: $INTRA_OP_THREADS"
+  echo "    log_severity_level: $LOG_SEVERITY_LEVEL"
+  echo "    input_quant_scale: $INPUT_QUANT_SCALE"
+  echo "    input_quant_zero_point: $INPUT_QUANT_ZERO_POINT"
+  echo "    box_dequant_scale: $BOX_DEQUANT_SCALE"
+  echo "    box_dequant_zero_point: $BOX_DEQUANT_ZERO_POINT"
+  echo "    score_dequant_scale: $SCORE_DEQUANT_SCALE"
+  echo "    score_dequant_zero_point: $SCORE_DEQUANT_ZERO_POINT"
+  echo "    execution_providers: $PROVIDERS_YAML"
+  echo "    qnn_backend_path: \"$QNN_BACKEND_PATH\""
+  echo "    qnn_context_cache_path: \"$QNN_CONTEXT_CACHE_PATH\""
+  echo "    stop_topic: \"$STOP_TOPIC\""
+  echo "    roi: \"$ROI\""
+  echo "    min_overlap_ratio: $MIN_OVERLAP_RATIO"
+  echo "    frames_to_block: $FRAMES_TO_BLOCK"
+  echo "    frames_to_clear: $FRAMES_TO_CLEAR"
+} > "$SNAP_DATA/params.yaml"
+
+{
+  [ -n "$NAMESPACE" ] && echo "NAMESPACE=\"$NAMESPACE\""
+  [ -n "$NODE_NAME" ] && echo "NODE_NAME=\"$NODE_NAME\""
+  [ -n "$ROS_DOMAIN_ID" ] && echo "ROS_DOMAIN_ID=\"$ROS_DOMAIN_ID\""
+  [ -n "$RMW_IMPLEMENTATION" ] && echo "RMW_IMPLEMENTATION=\"$RMW_IMPLEMENTATION\""
+  true
+} > "$SNAP_DATA/runtime.env"
+
+snapctl set-health okay
+snapctl start --enable "$SNAP_NAME.perception" || true
+
+# Restart the daemon ONLY when something other than the prompt changed. OWL-ViT
+# has a ~40 s one-time graph compile at session start, so a prompt-only change
+# must NOT restart -- the running node picks it up live from prompt.txt (which
+# we already rewrote above). Signature = params.yaml with the prompt line
+# stripped, so a prompt-only edit leaves the signature unchanged.
+SIG_FILE="$SNAP_DATA/.config_sig"
+NEW_SIG="$(grep -v '^    prompt:' "$SNAP_DATA/params.yaml" | md5sum | cut -d' ' -f1)"
+OLD_SIG=""
+[ -f "$SIG_FILE" ] && OLD_SIG="$(cat "$SIG_FILE")"
+printf '%s' "$NEW_SIG" > "$SIG_FILE"
+
+if [ "$NEW_SIG" != "$OLD_SIG" ]; then
+  snapctl restart "$SNAP_NAME.perception" || true
+fi

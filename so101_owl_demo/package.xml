@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>so101_owl_demo</name>
+  <version>0.1.0</version>
+  <description>
+    Open-vocabulary object detection demo for the SO-101 on Qualcomm Hexagon
+    NPU. The "swap the model, change what you look for" sibling of
+    so101_depth_demo / so101_yolo_demo: same ONNX Runtime + QNN (HTP) inference
+    pattern and the same camera input, but detects whatever free-form TEXT
+    PROMPT you give it (default "a hand") using Qualcomm AI-Hub's OWL-ViT
+    (OWL-ViT open-vocabulary detector, ViT-B/32 CLIP backbone) instead of a
+    fixed COCO class set. Publishes an annotated visualisation, machine-readable
+    vision_msgs/Detection2DArray detections, and the same
+    /safety/protective_stop contract (ROI overlap + hysteresis) as its siblings,
+    so the enforcement nodes (safety_pause_bridge / trajectory_safety_gate)
+    never change. This is the Qualcomm/NPU counterpart of the Jetson-only
+    NanoOWL variant.
+  </description>
+  <maintainer email="giuseppe.barbieri@canonical.com">Giuseppe Barbieri</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>vision_msgs</exec_depend>
+
+  <!-- Python runtime deps provided via the snap build / pip:
+       onnxruntime, onnxruntime-qnn, numpy, opencv-python (cv2), transformers
+       (CLIP tokenizer only; no torch). -->
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

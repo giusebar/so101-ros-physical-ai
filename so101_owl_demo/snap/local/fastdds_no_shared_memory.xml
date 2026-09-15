@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fast DDS profile that forces UDPv4-only transport and disables the
+  shared-memory (SHM) transport. Inside strict confinement the SHM transport
+  fails (it needs /dev/shm segments + file locks that the sandbox doesn't
+  share between snaps), so participants fall back noisily or drop local
+  traffic. Forcing UDP loopback keeps DDS discovery/data working across the
+  so101-* snaps without SHM.
+
+  Activated by exporting FASTRTPS_DEFAULT_PROFILES_FILE at the path this file
+  is organized to (usr/share/fastdds_no_shared_memory.xml) in the launch
+  script. Only takes effect with rmw_fastrtps_cpp.
+-->
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <profiles>
+    <transport_descriptors>
+      <transport_descriptor>
+        <transport_id>udp_transport</transport_id>
+        <type>UDPv4</type>
+      </transport_descriptor>
+    </transport_descriptors>
+    <participant profile_name="no_shared_memory" is_default_profile="true">
+      <rtps>
+        <userTransports>
+          <transport_id>udp_transport</transport_id>
+        </userTransports>
+        <!-- Do NOT auto-add the builtin SHM/UDP transports. -->
+        <useBuiltinTransports>false</useBuiltinTransports>
+      </rtps>
+    </participant>
+  </profiles>
+</dds>

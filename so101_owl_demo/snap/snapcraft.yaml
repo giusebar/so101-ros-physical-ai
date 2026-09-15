@@ -1,0 +1,218 @@
+name: ai-vision-ros2
+base: core24
+version: '1.0.0-owl-qualcomm'
+summary: OWL-ViT open-vocabulary detection on Qualcomm Hexagon NPU / QNN (ROS 2 Jazzy)
+description: |
+  Open-vocabulary object detection for the SO-101 arm, on a Qualcomm IQ-9075
+  EVK (or similar QRB/Snapdragon board running the Ubuntu-on-Qualcomm IoT
+  stack). Subscribes to a ROS 2 image topic, runs Qualcomm AI-Hub's OWL-ViT
+  (open-vocabulary detector, ViT-B/32 CLIP backbone) with ONNX Runtime's QNN
+  execution provider on the Hexagon NPU, and republishes an annotated
+  detection image (for viewing, with the safety ROI/trigger overlaid), a
+  vision_msgs/Detection2DArray of detections, and a std_msgs/Bool
+  protective-stop signal computed directly by this node (ROI overlap +
+  hysteresis debounce).
+
+  Unlike the fixed-class YOLO variant, OWL-ViT detects whatever free-form TEXT
+  PROMPT you give it (default "a hand"): the prompt is a live runtime input, so
+  it can be swapped without reloading the model via a ROS topic or
+  `snap set ai-vision-ros2 prompt="a cup"`. This is the Qualcomm/NPU
+  counterpart of the Jetson-only NanoOWL variant -- same camera input, same
+  detection + protective-stop outputs, same ROI-overlap + hysteresis trigger,
+  different accelerator (QNN HTP instead of TensorRT).
+
+  This is the OWL-ViT Qualcomm variant of the "ai-vision-ros2" snap, published
+  on the latest/qualcomm/edge channel (the depth variant is on
+  latest/qualcomm/stable) -- same snap name, same `perception` service, so the
+  channel-swap story is preserved per architecture.
+
+  The bundled Qualcomm AI-Hub OWL-ViT ONNX is w8a16-quantised with static
+  shapes and runs fully on the Hexagon NPU (~23 ms/inference on the IQ-9075).
+  The bundled onnxruntime-qnn (QAIRT 2.46) is version-matched to the board's
+  on-device Qualcomm SDK.
+
+  Runs as an always-on daemon. Configure with `snap set`, e.g.:
+
+      snap set ai-vision-ros2 prompt="a hand"
+      snap set ai-vision-ros2 input-image-topic=/my/camera/image_raw
+      snap set ai-vision-ros2 score-threshold=0.1
+
+  Requires the Ubuntu-on-Qualcomm IoT stack on the target and the custom-device
+  interface connected for NPU (fastrpc) access. Check status with
+  `snap services ai-vision-ros2` / `snap logs ai-vision-ros2`.
+
+grade: stable
+confinement: strict
+compression: lzo
+
+platforms:
+  arm64:
+    build-on: [arm64]
+    build-for: [arm64]
+
+# Qualcomm IoT PPA: provides the fastrpc userspace driver (qcom-fastrpc1) and
+# the Adreno OpenCL userspace driver, matching the on-device stack.
+package-repositories:
+  - type: apt
+    formats: [deb]
+    components: [main]
+    suites: [noble]
+    key-id: 33EF0ACBC6FE252590ABBAF21C70EB0C444248D7
+    key-server: keyserver.ubuntu.com
+    url: https://ppa.launchpadcontent.net/ubuntu-qcom-iot/qcom-ppa/ubuntu
+    architectures: [arm64]
+
+# Provider side: a custom-device slot naming the Qualcomm accelerator nodes.
+# custom-device's UDevConnectedPlug udev-tags the device nodes, which is what
+# the mandatory core24 device cgroup requires (system-files/hardware-observe
+# cannot do this). /dev/fastrpc-cdsp (Hexagon DSP / NPU fastrpc channel) is the
+# node the HTP backend needs -- it is owned fastrpc:fastrpc with others=r, and
+# the confined root daemon opens it O_RDONLY (which libcdsprpc uses), so no
+# udev/permission change is required. /dev/kgsl-3d0 (Adreno GPU) is kept for
+# the optional GPU backend.
+slots:
+  qcom-accel:
+    interface: custom-device
+    custom-device: qcom-accel
+    devices:
+      - /dev/kgsl-3d0
+      - /dev/fastrpc-cdsp
+      - /dev/fastrpc-cdsp1
+    files:
+      read:
+        - /sys/class/kgsl/kgsl-3d0/gpu_busy_percentage
+        - /sys/class/kgsl/kgsl-3d0/gpuclk
+
+plugs:
+  qcom-accel-plug:
+    interface: custom-device
+    custom-device: qcom-accel
+
+apps:
+  perception:
+    extensions: [ros2-jazzy-ros-base]
+    command: usr/bin/owldetect-launch
+    daemon: simple
+    install-mode: disable
+    restart-condition: on-failure
+    restart-delay: 5s
+    environment:
+      # fastrpc userspace (libcdsprpc.so, dlopen'd by libQnnHtp.so to reach the
+      # Hexagon DSP) and the Adreno OpenCL driver live in the multiarch dir;
+      # lapack/blas (cv2) subdirs are prepended by the launcher. The QNN
+      # provider + backend libs (incl. the Hexagon skels) ship inside the
+      # onnxruntime-qnn wheel; ADSP_LIBRARY_PATH (set in the launcher) points
+      # the DSP loader at them.
+      LD_LIBRARY_PATH: "$SNAP/usr/lib:$SNAP/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
+    plugs:
+      - network
+      - network-bind
+      - hardware-observe
+      - opengl
+      - qcom-accel-plug
+
+hooks:
+  configure:
+    plugs:
+      - qcom-accel-plug
+
+parts:
+  owl-demo:
+    plugin: colcon
+    source: .
+    stage-packages:
+      - libgomp1
+      - liblapack3
+      - libblas3
+    build-packages:
+      - python3-pip
+    # colcon builds the ROS package; then install the Python inference deps
+    # (ONNX Runtime with the QNN plugin execution provider) plus transformers
+    # (for the CLIP text tokenizer ONLY -- no torch) into the Debian
+    # dist-packages path. Versions are PINNED: onnxruntime-qnn 2.2.0 bundles
+    # QAIRT 2.46, which matches the on-device Qualcomm SDK on this board -- a
+    # mismatched QAIRT makes the QNN backend reject this SoC. The Qualcomm
+    # AI-Hub OWL-ViT (validated with QAIRT 2.45) loads and runs fully on the
+    # Hexagon NPU under 2.46. cp312 aarch64 -> requires core24's Python 3.12.
+    override-build: |
+      craftctl default
+      pip3 install \
+        --ignore-installed \
+        --no-compile \
+        --target="${CRAFT_PART_INSTALL}/usr/lib/python3/dist-packages" \
+        "numpy" \
+        "opencv-python-headless" \
+        "onnxruntime==1.24.4" \
+        "onnxruntime-qnn==2.2.0" \
+        "transformers"
+
+  # The onnxruntime-qnn wheel (installed in the owl-demo part) already ships the
+  # QNN provider library AND the QNN backend libs (libQnnHtp + Hexagon skels,
+  # libQnnGpu, ...). At runtime libQnnHtp.so dlopen()s the fastrpc userspace
+  # driver to reach the Hexagon DSP -- that lib (libcdsprpc.so, from
+  # qcom-fastrpc1) is NOT in the wheel and must be staged from the Qualcomm IoT
+  # PPA so it matches the on-device DSP. qcom-fastrpc-dev provides the
+  # unversioned .so symlink some loaders look for.
+  qnn-runtime:
+    plugin: nil
+    stage-packages:
+      - qcom-fastrpc1
+      - qcom-fastrpc-dev
+
+  # Qualcomm AI-Hub OWL-ViT model, w8a16-quantised and validated for the Hexagon
+  # NPU. ViT-B/32 CLIP backbone, static shapes (image 1x3x768x768 uint16, text
+  # 1x16 int32), quantised uint16 box/score outputs (the node dequantises). NMS
+  # is NOT in the graph (the node runs it). Publicly downloadable (no AI-Hub
+  # account needed). Ships the .onnx, external .data weights and metadata.json
+  # (quantisation params) under models/owl_vit/.
+  owl-model:
+    plugin: nil
+    build-packages:
+      - curl
+      - ca-certificates
+      - unzip
+    override-build: |
+      set -eux
+      dst="${CRAFT_PART_INSTALL}/models/owl_vit"
+      mkdir -p "${dst}"
+      zip="${CRAFT_PART_BUILD}/owl.zip"
+      curl -fL --retry 5 --retry-delay 2 \
+        "https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/owl_vit/releases/v0.62.2/owl_vit-onnx-w8a16.zip" \
+        -o "${zip}"
+      test -s "${zip}"
+      unzip -o "${zip}" -d "${CRAFT_PART_BUILD}/owl_extract"
+      src="${CRAFT_PART_BUILD}/owl_extract/owl_vit-onnx-w8a16"
+      cp "${src}/owl_vit.onnx" "${src}/owl_vit.data" \
+         "${src}/metadata.json" "${dst}/"
+      test -s "${dst}/owl_vit.onnx"
+      test -s "${dst}/owl_vit.data"
+
+  # CLIP text tokenizer files for google/owlvit-base-patch32 (the checkpoint the
+  # AI-Hub model was exported from). The node loads these with transformers'
+  # AutoTokenizer to turn a text prompt into input_ids/attention_mask. Tiny
+  # (~2 MB), pure vocab/merges -- no model weights, no torch. Bundled so the
+  # confined daemon never needs network access to tokenise.
+  tokenizer:
+    plugin: nil
+    build-packages:
+      - curl
+      - ca-certificates
+    override-build: |
+      set -eux
+      dst="${CRAFT_PART_INSTALL}/models/owl_vit/tokenizer"
+      mkdir -p "${dst}"
+      base="https://huggingface.co/google/owlvit-base-patch32/resolve/main"
+      for f in tokenizer_config.json special_tokens_map.json vocab.json merges.txt; do
+        curl -fL --retry 5 --retry-delay 2 "${base}/${f}?download=true" -o "${dst}/${f}"
+        test -s "${dst}/${f}"
+      done
+      # tokenizer.json (fast tokenizer) is optional; fetch best-effort.
+      curl -fL --retry 3 --retry-delay 2 "${base}/tokenizer.json?download=true" \
+        -o "${dst}/tokenizer.json" || rm -f "${dst}/tokenizer.json"
+
+  launcher:
+    plugin: dump
+    source: snap/local
+    organize:
+      owldetect-launch: usr/bin/owldetect-launch
+      fastdds_no_shared_memory.xml: usr/share/
