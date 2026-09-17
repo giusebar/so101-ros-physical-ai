@@ -75,6 +75,12 @@ parts:
         ! -name so101_description \
         ! -name feetech_ros2_driver \
         -exec rm -rf {} +
+      for pkg in rviz2 joint_state_publisher_gui joint_state_publisher \
+                 realsense2_camera gscam camera_ros usb_cam \
+                 ros_gz_sim ros_gz_bridge gz_ros2_control; do
+        find "${CRAFT_PART_SRC}" -name package.xml -exec \
+          sed -i "\|<exec_depend>${pkg}</exec_depend>|d" {} +
+      done
     colcon-packages:
       - so101_bringup
       - so101_description
