@@ -34,6 +34,8 @@ baked into the graph.
 
 Subscribes:
   <input_image_topic>        sensor_msgs/Image           (rgb8 | bgr8 | mono8 | rgba8 | bgra8)
+                             OR, when use_compressed=True (default),
+                             <input_image_topic>/compressed  sensor_msgs/CompressedImage (JPEG/PNG)
   <prompt_topic>             std_msgs/String             (optional live prompt update)
 
 Publishes:
@@ -91,7 +93,7 @@ import numpy as np
 import onnxruntime as ort
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import Bool, String
 from vision_msgs.msg import (
     BoundingBox2D,
@@ -158,6 +160,7 @@ class OwlDetectNode(Node):
         default_tok = os.path.expanduser("~/models/owl_vit/tokenizer")
         self.declare_parameter("model_path", default_model)
         self.declare_parameter("input_image_topic", "/static_camera/image_raw")
+        self.declare_parameter("use_compressed", True)
         self.declare_parameter("output_image_topic", "/camera/detections/visualization")
         self.declare_parameter("output_detections_topic", "/perception/detections")
         self.declare_parameter("input_size", 768)
@@ -193,6 +196,7 @@ class OwlDetectNode(Node):
 
         model_path = self.get_parameter("model_path").value
         in_topic = self.get_parameter("input_image_topic").value
+        self._use_compressed = bool(self.get_parameter("use_compressed").value)
         out_topic = self.get_parameter("output_image_topic").value
         det_out_topic = self.get_parameter("output_detections_topic").value
         self._in_size = int(self.get_parameter("input_size").value)
@@ -283,7 +287,15 @@ class OwlDetectNode(Node):
         self._pub = self.create_publisher(Image, out_topic, 5)
         self._det_pub = self.create_publisher(Detection2DArray, det_out_topic, 5)
         self._stop_pub = self.create_publisher(Bool, stop_topic, 10)
-        self._sub = self.create_subscription(Image, in_topic, self._image_cb, 5)
+        if self._use_compressed:
+            comp_topic = in_topic.rstrip("/") + "/compressed"
+            self._sub = self.create_subscription(
+                CompressedImage, comp_topic, self._compressed_cb, 5
+            )
+            self._sub_topic = comp_topic
+        else:
+            self._sub = self.create_subscription(Image, in_topic, self._image_cb, 5)
+            self._sub_topic = in_topic
         self._prompt_sub = self.create_subscription(
             String, prompt_topic, self._prompt_cb, 5
         )
@@ -293,7 +305,9 @@ class OwlDetectNode(Node):
         self._frame_count = 0
         self._last_infer_t = 0.0
         self.get_logger().info(
-            f"OwlDetectNode ready — subscribing '{in_topic}', "
+            f"OwlDetectNode ready — subscribing '{self._sub_topic}'"
+            + (" (compressed)" if self._use_compressed else "")
+            + ", "
             f"prompt='{self._label}', "
             f"publishing viz '{out_topic}', detections '{det_out_topic}', "
             f"protective stop '{stop_topic}' (overlap>{self._min_overlap})"
@@ -674,25 +688,44 @@ class OwlDetectNode(Node):
     # Subscription callback
     # ────────────────────────────────────────────────────────────────────────
 
-    def _image_cb(self, msg: Image):
+    def _throttled(self) -> bool:
         if self._min_period > 0.0:
             now = time.monotonic()
             if now - self._last_infer_t < self._min_period:
-                return
+                return True
             self._last_infer_t = now
+        return False
 
+    def _image_cb(self, msg: Image):
+        if self._throttled():
+            return
         try:
             bgr = self._image_to_bgr(msg)
         except ValueError as exc:
             self.get_logger().warn(str(exc), throttle_duration_sec=5.0)
             return
+        stamp = msg.header.stamp if msg.header.stamp.sec else self.get_clock().now().to_msg()
+        frame_id = msg.header.frame_id or "camera"
+        self._process(bgr, stamp, frame_id)
 
+    def _compressed_cb(self, msg: CompressedImage):
+        if self._throttled():
+            return
+        buf = np.frombuffer(bytes(msg.data), dtype=np.uint8)
+        bgr = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+        if bgr is None:
+            self.get_logger().warn(
+                "Failed to decode compressed image", throttle_duration_sec=5.0
+            )
+            return
+        stamp = msg.header.stamp if msg.header.stamp.sec else self.get_clock().now().to_msg()
+        frame_id = msg.header.frame_id or "camera"
+        self._process(bgr, stamp, frame_id)
+
+    def _process(self, bgr: np.ndarray, stamp, frame_id: str):
         h, w = bgr.shape[:2]
         boxes, scores = self._infer(self._preprocess(bgr))
         detections = self._postprocess(boxes, scores, w, h)
-
-        stamp = msg.header.stamp if msg.header.stamp.sec else self.get_clock().now().to_msg()
-        frame_id = msg.header.frame_id or "camera"
 
         stop_state, best_overlap = self._evaluate_stop(detections, w, h)
         self._stop_pub.publish(Bool(data=stop_state))

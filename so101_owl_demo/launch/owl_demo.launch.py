@@ -27,6 +27,13 @@ def generate_launch_description():
             description="Camera image topic to run detection on.",
         ),
         DeclareLaunchArgument(
+            "use_compressed",
+            default_value="true",
+            description="Subscribe to <input_image_topic>/compressed "
+            "(sensor_msgs/CompressedImage, JPEG/PNG) instead of the raw "
+            "sensor_msgs/Image. Less DDS/transport load than raw frames.",
+        ),
+        DeclareLaunchArgument(
             "output_image_topic",
             default_value="/camera/detections/visualization",
             description="Annotated detection visualisation topic to publish.",
@@ -90,6 +97,7 @@ def generate_launch_description():
             {
                 "model_path": LaunchConfiguration("model_path"),
                 "input_image_topic": LaunchConfiguration("input_image_topic"),
+                "use_compressed": LaunchConfiguration("use_compressed"),
                 "output_image_topic": LaunchConfiguration("output_image_topic"),
                 "output_detections_topic": LaunchConfiguration("output_detections_topic"),
                 "input_size": LaunchConfiguration("input_size"),

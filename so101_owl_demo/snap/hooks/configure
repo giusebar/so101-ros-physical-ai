@@ -35,6 +35,9 @@ get_number() {
 MODEL_PATH="$(get model-path "$SNAP/models/owl_vit/owl_vit.onnx")"
 TOKENIZER_DIR="$(get tokenizer-dir "$SNAP/models/owl_vit/tokenizer")"
 INPUT_IMAGE_TOPIC="$(get input-image-topic /static_camera/image_raw)"
+# Subscribe to the compressed (JPEG) image by default -- far less DDS/transport
+# load than the raw frame. The node appends "/compressed" to the topic above.
+USE_COMPRESSED="$(get use-compressed true)"
 OUTPUT_IMAGE_TOPIC="$(get output-image-topic /camera/detections/visualization)"
 OUTPUT_DETECTIONS_TOPIC="$(get output-detections-topic /perception/detections)"
 INPUT_SIZE="$(get_number input-size 768)"
@@ -109,6 +112,7 @@ PROMPT_YAML="$(printf '%s' "$PROMPT" | sed 's/"/\\"/g')"
   echo "    model_path: \"$MODEL_PATH\""
   echo "    tokenizer_dir: \"$TOKENIZER_DIR\""
   echo "    input_image_topic: \"$INPUT_IMAGE_TOPIC\""
+  echo "    use_compressed: $USE_COMPRESSED"
   echo "    output_image_topic: \"$OUTPUT_IMAGE_TOPIC\""
   echo "    output_detections_topic: \"$OUTPUT_DETECTIONS_TOPIC\""
   echo "    input_size: $INPUT_SIZE"

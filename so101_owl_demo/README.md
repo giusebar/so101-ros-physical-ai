@@ -2,7 +2,9 @@
 
 Open-vocabulary object detection for the SO-101 on the **Qualcomm Hexagon NPU**.
 
-`owl_detect_node` subscribes to a camera image topic, runs Qualcomm AI-Hub's
+`owl_detect_node` subscribes to a camera image topic (the compressed JPEG
+stream by default — `<input_image_topic>/compressed`, see `use_compressed`),
+runs Qualcomm AI-Hub's
 **OWL-ViT** (open-vocabulary detector, ViT-B/32 CLIP backbone) with ONNX
 Runtime's **QNN execution provider** on the Hexagon NPU (HTP backend), and
 publishes:
@@ -54,6 +56,8 @@ ros2 launch so101_owl_demo owl_demo.launch.py prompt:="a hand"
 
 | Param | Default | Meaning |
 | --- | --- | --- |
+| `input_image_topic` | `/static_camera/image_raw` | camera image base topic |
+| `use_compressed` | `true` | subscribe to `<input_image_topic>/compressed` (`sensor_msgs/CompressedImage`) instead of raw `Image` |
 | `prompt` | `a hand` | free-form text prompt to detect |
 | `prompt_topic` | `/perception/prompt` | live prompt update (String) |
 | `prompt_file` | `""` | polled file for live prompt update |
