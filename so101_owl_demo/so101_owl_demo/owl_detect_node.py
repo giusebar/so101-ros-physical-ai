@@ -730,8 +730,10 @@ class OwlDetectNode(Node):
         stop_state, best_overlap = self._evaluate_stop(detections, w, h)
         self._stop_pub.publish(Bool(data=stop_state))
 
-        self._publish_detections(detections, stamp, frame_id)
-        self._draw_and_publish_viz(bgr, detections, stop_state, stamp, frame_id)
+        if self._det_pub.get_subscription_count() > 0:
+            self._publish_detections(detections, stamp, frame_id)
+        if self._pub.get_subscription_count() > 0:
+            self._draw_and_publish_viz(bgr, detections, stop_state, stamp, frame_id)
 
         self._frame_count += 1
         if self._frame_count % 30 == 0:
